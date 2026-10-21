@@ -108,9 +108,54 @@ test("short-link network failure stores a safe diagnostic and preserves the last
   fetchHandler = async () => { throw new Error("private raw network details"); };
   const result = await check("https://amzn.eu/d/02JpD8hn");
   assert.equal(result.errorCode, "SHORT_LINK_NETWORK_ERROR");
-  assert.deepEqual(result.diagnostics, { redirectCount: 0 });
+  assert.equal(result.diagnostics, undefined);
   assert.equal(result.checkedAt, stored.lastCheck.checkedAt);
   assert.equal(JSON.stringify(result).includes("private raw network details"), false);
+  assert.deepEqual(stored.lastSuccess, previous);
+  assert.equal(stored.lastCheck.inputUrl, "https://amzn.eu/d/02JpD8hn");
+});
+
+test("short links follow automatically, then use the existing manual canonical price fetch", async () => {
+  permission = true;
+  deniedOrigins.clear();
+  stored.lastSuccess = previous;
+  const calls = [];
+  fetchHandler = async (url, options) => {
+    calls.push({ url, options });
+    if (url === "https://amzn.eu/d/02JpD8hn") {
+      return { url: "https://www.amazon.com.tr/Soundcore-Kulakl%C4%B1k/dp/B0CQXKXBR7?ref_=share", status: 200, ok: true, type: "basic" };
+    }
+    return new Response('<div id="corePrice_feature_div"></div>', {
+      status: 200,
+      headers: { "content-type": "text/html; charset=UTF-8" }
+    });
+  };
+
+  const result = await check("https://amzn.eu/d/02JpD8hn");
+  assert.equal(result.status, "success");
+  assert.equal(result.asin, "B0CQXKXBR7");
+  assert.equal(result.canonicalUrl, "https://www.amazon.com.tr/dp/B0CQXKXBR7");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.redirect, "follow");
+  assert.equal(calls[0].options.credentials, "omit");
+  assert.equal(calls[1].url, result.canonicalUrl);
+  assert.equal(calls[1].options.redirect, "manual");
+  assert.deepEqual(stored.lastSuccess, result);
+});
+
+test("an unsafe final short-link URL records a failure and preserves the previous successful price", async () => {
+  permission = true;
+  deniedOrigins.clear();
+  stored.lastSuccess = previous;
+  let calls = 0;
+  fetchHandler = async () => {
+    calls++;
+    return { url: "https://unrelated.example/dp/B0CQXKXBR7", status: 200, ok: true, type: "basic" };
+  };
+  const result = await check("https://amzn.eu/d/02JpD8hn");
+  assert.equal(result.errorCode, "SHORT_LINK_UNSAFE_REDIRECT");
+  assert.deepEqual(result.diagnostics, { httpStatus: 200, responseType: "basic" });
+  assert.equal(calls, 1);
   assert.deepEqual(stored.lastSuccess, previous);
   assert.equal(stored.lastCheck.inputUrl, "https://amzn.eu/d/02JpD8hn");
 });
@@ -123,9 +168,7 @@ test("opaque short-link redirect details reach local diagnostics without changin
   const result = await check("https://amzn.eu/d/02JpD8hn");
   assert.equal(result.errorCode, "SHORT_LINK_OPAQUE_REDIRECT");
   assert.deepEqual(result.diagnostics, {
-    responseType: "opaqueredirect",
-    redirectCount: 0,
-    locationAccessible: false
+    responseType: "opaqueredirect"
   });
   assert.ok(result.checkedAt);
   assert.deepEqual(stored.lastSuccess, previous);
@@ -139,13 +182,11 @@ test("after safe resolution, missing Amazon Türkiye permission prevents the pri
   let networkRequests = [];
   fetchHandler = async (url, options) => {
     networkRequests.push(url);
-    return new Response(null, {
-      status: 302,
-      headers: { location: "https://www.amazon.com.tr/dp/B0CQXKXBR7" }
-    });
+    return { url: "https://www.amazon.com.tr/dp/B0CQXKXBR7", status: 200, ok: true, type: "basic" };
   };
   const result = await check("https://amzn.eu/d/02JpD8hn");
   assert.equal(result.errorCode, "PERMISSION_REQUIRED");
   assert.deepEqual(networkRequests, ["https://amzn.eu/d/02JpD8hn"]);
+  assert.equal(fetched.options.redirect, "follow");
   assert.deepEqual(stored.lastSuccess, previous);
 });

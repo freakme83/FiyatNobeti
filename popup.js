@@ -6,6 +6,7 @@ const form = document.querySelector("#probe-form");
 const input = document.querySelector("#product-url");
 const button = document.querySelector("#check-button");
 const status = document.querySelector("#status");
+const shortLinkNotice = document.querySelector("#short-link-notice");
 const latest = document.querySelector("#latest");
 const previous = document.querySelector("#previous");
 
@@ -25,6 +26,11 @@ const errors = {
   SHORT_LINK_TOO_MANY_REDIRECTS: "Kısa bağlantı çok fazla kez yönlendirildi.",
   SHORT_LINK_UNSAFE_REDIRECT: "Kısa bağlantı güvenli olmayan veya desteklenmeyen bir adrese yönlendirildi.",
   SHORT_LINK_UNSUPPORTED_MARKETPLACE: "Kısa bağlantı Amazon Türkiye dışındaki bir pazaryerine yönlendirildi.",
+  SHORT_LINK_OPAQUE_RESPONSE: "Kısa bağlantının yanıtı tarayıcı tarafından okunamadı.",
+  SHORT_LINK_UNUSABLE_RESPONSE: "Kısa bağlantı yanıtı kullanılamadı.",
+  SHORT_LINK_FINAL_URL_MISSING: "Kısa bağlantının ulaştığı ürün adresi alınamadı.",
+  SHORT_LINK_FINAL_URL_INVALID: "Kısa bağlantının ulaştığı adres doğrulanamadı.",
+  SHORT_LINK_UNSUPPORTED_PRODUCT_URL: "Kısa bağlantı desteklenen bir Amazon Türkiye ürün sayfasına ulaşmadı.",
   REDIRECT: "Amazon sayfayı başka bir adrese yönlendirdi; fiyat doğrulanamadı.",
   ACCESS_DENIED: "Amazon erişimi reddetti.",
   BOT_VERIFICATION: "Amazon robot doğrulaması istedi; fiyat okunamadı.",
@@ -42,6 +48,14 @@ const errors = {
 
 const formatPrice = value => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(value);
 const formatTime = value => new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+
+function updateShortLinkNotice() {
+  try {
+    shortLinkNotice.hidden = parseAmazonInput(input.value).type !== "short";
+  } catch {
+    shortLinkNotice.hidden = true;
+  }
+}
 
 function formatShortLinkDiagnostics(diagnostics = {}) {
   const parts = [];
@@ -117,7 +131,7 @@ form.addEventListener("submit", async event => {
 
   button.disabled = true;
   status.textContent = request.type === "short"
-    ? "Amazon bağlantısı çözümleniyor…"
+    ? "Amazon kısa bağlantısı çözümleniyor…"
     : "Fiyat kontrol ediliyor…";
   try {
     const origins = request.type === "short" ? [origin, shortLinkOrigin] : [origin];
@@ -126,6 +140,7 @@ form.addEventListener("submit", async event => {
     const result = await chrome.runtime.sendMessage({ type: "CHECK_PRICE", url: input.value });
     if (!result || !["success", "failure"].includes(result.status)) throw new Error("BAD_RESPONSE");
     if (result.canonicalUrl) input.value = result.canonicalUrl;
+    updateShortLinkNotice();
     status.textContent = result.storageError ? "Kontrol tamamlandı ancak sonuç yerel olarak kaydedilemedi." : "Kontrol tamamlandı.";
     const { lastCheck, lastSuccess } = await chrome.storage.local.get(["lastCheck", "lastSuccess"]);
     render(result.storageError ? result : lastCheck, lastSuccess);
@@ -136,4 +151,5 @@ form.addEventListener("submit", async event => {
   }
 });
 
+input.addEventListener("input", updateShortLinkNotice);
 restore();

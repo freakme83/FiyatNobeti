@@ -6,6 +6,7 @@ h1 { margin: 0; font-size: 20px; }
 label { display: block; font-weight: 650; margin-bottom: 6px; }
 input { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #a5b1bb; border-radius: 6px; }
 input:focus-visible, button:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
+.notice { margin: 8px 0 0; color: #53606c; font-size: 12px; line-height: 1.4; }
 button { width: 100%; padding: 10px; margin-top: 10px; border: 0; border-radius: 6px; color: white; background: #146397; font-weight: 700; cursor: pointer; }
 button:disabled { opacity: .6; cursor: wait; }
 #status { min-height: 1.5em; margin: 14px 0 4px; }
