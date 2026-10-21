@@ -5,7 +5,33 @@ const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
 const SHORT_LINK_ORIGIN = "https://amzn.eu/*";
 const OFFSCREEN_PATH = "offscreen.html";
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
+const SHORT_LINK_ERROR_CODES = new Set([
+  "SHORT_LINK_OPAQUE_REDIRECT",
+  "SHORT_LINK_LOCATION_MISSING",
+  "SHORT_LINK_HTTP_STATUS",
+  "SHORT_LINK_NETWORK_ERROR",
+  "SHORT_LINK_TIMEOUT",
+  "SHORT_LINK_REDIRECT_LOOP",
+  "SHORT_LINK_TOO_MANY_REDIRECTS",
+  "SHORT_LINK_UNSAFE_REDIRECT",
+  "SHORT_LINK_UNSUPPORTED_MARKETPLACE"
+]);
+const SHORT_LINK_RESPONSE_TYPES = new Set(["basic", "cors", "default", "error", "opaque", "opaqueredirect"]);
 let creatingOffscreen;
+
+function shortLinkDiagnostics(error) {
+  const diagnostics = {};
+  const source = error?.diagnostics || {};
+  if (Number.isInteger(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599) {
+    diagnostics.httpStatus = source.httpStatus;
+  }
+  if (SHORT_LINK_RESPONSE_TYPES.has(source.responseType)) diagnostics.responseType = source.responseType;
+  if (Number.isInteger(source.redirectCount) && source.redirectCount >= 0 && source.redirectCount <= 5) {
+    diagnostics.redirectCount = source.redirectCount;
+  }
+  if (typeof source.locationAccessible === "boolean") diagnostics.locationAccessible = source.locationAccessible;
+  return diagnostics;
+}
 
 async function ensureOffscreen() {
   if (await chrome.offscreen.hasDocument()) return;
@@ -70,7 +96,11 @@ async function probe(input) {
           result.canonicalUrl = product.canonicalUrl;
           delete result.inputUrl;
         } catch (error) {
-          result.errorCode = error.message || "SHORT_LINK_RESOLUTION_FAILED";
+          result.errorCode = SHORT_LINK_ERROR_CODES.has(error?.code)
+            ? error.code
+            : "SHORT_LINK_RESOLUTION_FAILED";
+          const diagnostics = shortLinkDiagnostics(error);
+          if (Object.keys(diagnostics).length) result.diagnostics = diagnostics;
         } finally {
           clearTimeout(timeout);
         }

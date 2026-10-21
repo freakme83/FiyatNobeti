@@ -15,10 +15,16 @@ const errors = {
   UNSUPPORTED_MARKETPLACE: "Bu bağlantı Amazon Türkiye'ye ait değil.",
   PERMISSION_REQUIRED: "Amazon Türkiye izni verilmedi.",
   SHORT_LINK_PERMISSION_REQUIRED: "Kısa Amazon bağlantısı izni verilmedi.",
-  SHORT_LINK_RESOLUTION_FAILED: "Kısa Amazon bağlantısı çözümlenemedi.",
+  SHORT_LINK_RESOLUTION_FAILED: "Kısa Amazon bağlantısı güvenli biçimde çözümlenemedi.",
+  SHORT_LINK_OPAQUE_REDIRECT: "Kısa Amazon bağlantısının yönlendirme adresi tarayıcı tarafından gizlendi.",
+  SHORT_LINK_LOCATION_MISSING: "Kısa Amazon bağlantısı yanıtında yönlendirme adresi bulunamadı.",
+  SHORT_LINK_HTTP_STATUS: "Kısa Amazon bağlantısı beklenmeyen bir HTTP yanıtı verdi.",
+  SHORT_LINK_NETWORK_ERROR: "Kısa Amazon bağlantısı için ağ isteği başarısız oldu.",
+  SHORT_LINK_TIMEOUT: "Kısa Amazon bağlantısının yanıtı zaman aşımına uğradı.",
   SHORT_LINK_REDIRECT_LOOP: "Kısa bağlantıda yönlendirme döngüsü algılandı.",
   SHORT_LINK_TOO_MANY_REDIRECTS: "Kısa bağlantı çok fazla kez yönlendirildi.",
-  UNSAFE_REDIRECT: "Kısa bağlantı güvenli olmayan bir adrese yönlendirildi.",
+  SHORT_LINK_UNSAFE_REDIRECT: "Kısa bağlantı güvenli olmayan veya desteklenmeyen bir adrese yönlendirildi.",
+  SHORT_LINK_UNSUPPORTED_MARKETPLACE: "Kısa bağlantı Amazon Türkiye dışındaki bir pazaryerine yönlendirildi.",
   REDIRECT: "Amazon sayfayı başka bir adrese yönlendirdi; fiyat doğrulanamadı.",
   ACCESS_DENIED: "Amazon erişimi reddetti.",
   BOT_VERIFICATION: "Amazon robot doğrulaması istedi; fiyat okunamadı.",
@@ -37,6 +43,23 @@ const errors = {
 const formatPrice = value => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(value);
 const formatTime = value => new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
+function formatShortLinkDiagnostics(diagnostics = {}) {
+  const parts = [];
+  if (Number.isInteger(diagnostics.httpStatus) && diagnostics.httpStatus >= 100 && diagnostics.httpStatus <= 599) {
+    parts.push(`HTTP durumu: ${diagnostics.httpStatus}`);
+  }
+  if (["basic", "cors", "default", "error", "opaque", "opaqueredirect"].includes(diagnostics.responseType)) {
+    parts.push(`Yanıt türü: ${diagnostics.responseType}`);
+  }
+  if (Number.isInteger(diagnostics.redirectCount) && diagnostics.redirectCount >= 0 && diagnostics.redirectCount <= 5) {
+    parts.push(`Yönlendirme sayısı: ${diagnostics.redirectCount}`);
+  }
+  if (typeof diagnostics.locationAccessible === "boolean") {
+    parts.push(`Location erişilebilir: ${diagnostics.locationAccessible ? "Evet" : "Hayır"}`);
+  }
+  return parts.join(" · ");
+}
+
 function renderSection(element, heading, result) {
   element.replaceChildren();
   if (!result) { element.hidden = true; return; }
@@ -52,6 +75,15 @@ function renderSection(element, heading, result) {
   meta.textContent = [result.asin, result.checkedAt && formatTime(result.checkedAt), result.errorCode, result.httpStatus && `HTTP ${result.httpStatus}`]
     .filter(Boolean).join(" · ");
   element.append(title, detail, meta);
+  const diagnosticText = result.errorCode?.startsWith("SHORT_LINK_")
+    ? formatShortLinkDiagnostics(result.diagnostics)
+    : "";
+  if (diagnosticText) {
+    const diagnostic = document.createElement("p");
+    diagnostic.className = "meta";
+    diagnostic.textContent = diagnosticText;
+    element.append(diagnostic);
+  }
   element.hidden = false;
 }
 

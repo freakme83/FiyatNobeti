@@ -101,15 +101,35 @@ test("short links request short-host access only on short-link checks", async ()
   assert.equal(stored.lastCheck.inputUrl, "https://amzn.eu/d/02JpD8hn");
 });
 
-test("short-link network failure is explicit and preserves the last valid price", async () => {
+test("short-link network failure stores a safe diagnostic and preserves the last valid price", async () => {
   permission = true;
   deniedOrigins.clear();
   stored.lastSuccess = previous;
-  fetchHandler = async () => { throw new Error("offline"); };
+  fetchHandler = async () => { throw new Error("private raw network details"); };
   const result = await check("https://amzn.eu/d/02JpD8hn");
-  assert.equal(result.errorCode, "SHORT_LINK_RESOLUTION_FAILED");
+  assert.equal(result.errorCode, "SHORT_LINK_NETWORK_ERROR");
+  assert.deepEqual(result.diagnostics, { redirectCount: 0 });
+  assert.equal(result.checkedAt, stored.lastCheck.checkedAt);
+  assert.equal(JSON.stringify(result).includes("private raw network details"), false);
   assert.deepEqual(stored.lastSuccess, previous);
   assert.equal(stored.lastCheck.inputUrl, "https://amzn.eu/d/02JpD8hn");
+});
+
+test("opaque short-link redirect details reach local diagnostics without changing last success", async () => {
+  permission = true;
+  deniedOrigins.clear();
+  stored.lastSuccess = previous;
+  fetchHandler = async () => ({ status: 0, type: "opaqueredirect", headers: new Headers() });
+  const result = await check("https://amzn.eu/d/02JpD8hn");
+  assert.equal(result.errorCode, "SHORT_LINK_OPAQUE_REDIRECT");
+  assert.deepEqual(result.diagnostics, {
+    responseType: "opaqueredirect",
+    redirectCount: 0,
+    locationAccessible: false
+  });
+  assert.ok(result.checkedAt);
+  assert.deepEqual(stored.lastSuccess, previous);
+  assert.deepEqual(stored.lastCheck, result);
 });
 
 test("after safe resolution, missing Amazon Türkiye permission prevents the price fetch", async () => {

@@ -45,6 +45,18 @@ Manifest `storage`, `offscreen` ve iki isteğe bağlı site erişimi içerir: `h
 
 Chrome veya Comet Fetch API'si elle yönlendirme yanıtının `Location` başlığını sunmazsa kısa bağlantı desteği o tarayıcıda çalışmaz. Güvenlik nedeniyle otomatik yönlendirmeli fetch veya görünür sekme yedeği kullanılmaz.
 
+### Kısa bağlantı hata tanıları
+
+`amzn.eu` yönlendirmeleri tarayıcıda başarısız olursa son kontrol kaydında kısa bir hata kodu, deneme zamanı ve yanıt mevcut kıldıysa sınırlı metadata tutulur: HTTP durumu, Fetch yanıt türü, yönlendirme sayısı ve `Location` başlığının erişilebilir olup olmadığı. Başlık değeri/hedef URL, yanıt gövdesi, çerez, kimlik bilgisi, başlıklar veya ham hata/stack saklanmaz. Popup kullanıcıya Türkçe açıklama, kod ve mevcut metadata'yı gösterir. Önceki başarılı fiyat ayrı tutulur ve başarısız deneme onu güncellemez.
+
+Tanı kodları: `SHORT_LINK_OPAQUE_REDIRECT` (tarayıcı yönlendirme yanıtını gizledi), `SHORT_LINK_LOCATION_MISSING`, `SHORT_LINK_HTTP_STATUS`, `SHORT_LINK_NETWORK_ERROR`, `SHORT_LINK_TIMEOUT`, `SHORT_LINK_REDIRECT_LOOP`, `SHORT_LINK_TOO_MANY_REDIRECTS`, `SHORT_LINK_UNSAFE_REDIRECT` ve `SHORT_LINK_UNSUPPORTED_MARKETPLACE`. Beklenmeyen hatalar `SHORT_LINK_RESOLUTION_FAILED` ile gösterilir. İzin reddi `SHORT_LINK_PERMISSION_REQUIRED` olarak kaydedilir.
+
+Bilinen gerçek tarayıcı sorunu: `https://amzn.eu/d/02JpD8hn` için önceki Chrome denemesi `SHORT_LINK_RESOLUTION_FAILED` verdi; bu tek başına nedenin opak yanıt, eksik `Location`, HTTP durumu veya ağ hatası olduğunu göstermiyor. Bu tanı commit'i yeni bir yönlendirme yöntemi denemez. Önce hangi güvenli başarısızlık durumunun oluştuğunu belirlemek gerekir; otomatik yönlendirmeyi açmak veya görünen sekme kullanmak güvenlik sınırını değiştirirdi.
+
+Sorunu Chrome'da yeniden üretmek için uzantıyı `chrome://extensions` üzerinden yeniden yükleyin/yenileyin, popup'a `https://amzn.eu/d/02JpD8hn` yapıştırın, kısa bağlantı iznini verin ve **Fiyatı kontrol et** düğmesine basın. Popup'taki kodu ve gösterilen tanı satırını (varsa HTTP durumu, yanıt türü, yönlendirme sayısı ve Location erişimi) not edin. Bildirirken tarayıcı/versiyonunu da ekleyin; tam bağlantı yönlendirme zincirini, başlıkları, sayfa içeriğini veya konsol dökümlerini paylaşmayın. Yerel kayıt `chrome.storage.local` içindeki `lastCheck` anahtarındadır.
+
+Otomatik testler yalnızca sahte yanıtları kullanır. Opaque redirect'in veya `Location` başlığının gerçek Chrome ya da Comet davranışını doğrulamaz; kısa bağlantı yönlendirmesi tarayıcıda ayrıca elle test edilmelidir.
+
 ## Testler
 
 Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu gerekmez. Testler sentetik HTML örnekleri ve DOM'un test uyarlaması ile fiyat seçme mantığını dener; gerçek Amazon ağına bağlanmaz. Gerçek tarayıcıda manifest yüklenmesi, offscreen DOMParser ve ağ yanıtı ayrıca elle doğrulanmalıdır.
