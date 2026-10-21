@@ -1,8 +1,14 @@
 import { parseAmazonInput } from "./src/url.js";
 import { errorMessage, renderProductRows } from "./src/watchlist-view.js";
+import { createPermissionOnboarding } from "./src/permission-onboarding.js";
+import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 
-const amazonOrigin = "https://www.amazon.com.tr/*";
-const shortLinkOrigin = "https://amzn.eu/*";
+const loadingView = document.querySelector("#permission-loading");
+const onboardingView = document.querySelector("#permission-onboarding");
+const normalView = document.querySelector("#normal-view");
+const permissionButton = document.querySelector("#permission-button");
+const permissionExplanation = document.querySelector("#permission-explanation");
+const permissionStatus = document.querySelector("#permission-status");
 const form = document.querySelector("#add-form");
 const input = document.querySelector("#product-url");
 const addButton = document.querySelector("#add-button");
@@ -24,7 +30,7 @@ async function loadAutoSettings() {
   autoEnabled.disabled = false;
   autoMode.textContent = result.settings.enabled ? "Açık" : "Kapalı";
   autoStatus.textContent = result.settings.enabled && result.errorCode === "PERMISSION_REQUIRED"
-    ? "Otomatik kontrol için Amazon Türkiye izni gerekli; ürün eklerken izin verebilirsiniz."
+    ? "Otomatik kontrol için Amazon Türkiye erişim izni gerekli."
     : "";
 }
 
@@ -75,10 +81,6 @@ function showFailure(result) {
     : message;
 }
 
-async function requestSitePermission(origins) {
-  try { await chrome.permissions.request({ origins }); } catch { /* Worker reports whether access is available. */ }
-}
-
 form.addEventListener("submit", async event => {
   event.preventDefault();
   let request;
@@ -88,7 +90,14 @@ form.addEventListener("submit", async event => {
   addButton.disabled = true;
   status.textContent = request.type === "short" ? "Amazon kısa bağlantısı çözümleniyor…" : "Ürün doğrulanıyor…";
   try {
-    await requestSitePermission(request.type === "short" ? [amazonOrigin, shortLinkOrigin] : [amazonOrigin]);
+    const submittedUrl = input.value;
+    const missingOrigins = await getMissingAmazonOrigins(chrome.permissions);
+    if (missingOrigins.length > 0) {
+      await permissionOnboarding.start();
+      input.value = submittedUrl;
+      updateShortLinkNotice();
+      return;
+    }
     const result = await chrome.runtime.sendMessage({ type: "ADD_PRODUCT", url: input.value });
     if (result?.status === "duplicate") {
       status.textContent = "Bu ürün zaten izleme listenizde.";
@@ -150,5 +159,19 @@ productList.addEventListener("click", async event => {
 });
 
 input.addEventListener("input", updateShortLinkNotice);
-loadWatchlist().catch(() => { status.textContent = errorMessage("STORAGE_ERROR"); });
-loadAutoSettings().catch(() => { autoStatus.textContent = "Otomatik kontrol ayarı okunamadı."; });
+
+const permissionOnboarding = createPermissionOnboarding({
+  permissions: chrome.permissions,
+  loadingView,
+  onboardingView,
+  normalView,
+  permissionButton,
+  explanation: permissionExplanation,
+  status: permissionStatus,
+  onAuthorized() {
+    loadWatchlist().catch(() => { status.textContent = errorMessage("STORAGE_ERROR"); });
+    loadAutoSettings().catch(() => { autoStatus.textContent = "Otomatik kontrol ayarı okunamadı."; });
+  },
+});
+
+permissionOnboarding.start();

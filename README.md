@@ -10,13 +10,17 @@ Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını el
 
 ## Yerel izleme listesi
 
-1. Uzantı simgesini açıp bir Amazon Türkiye ürün bağlantısı yapıştırın. `/dp/ASIN`, `/gp/product/ASIN`, başlıklı/izleme parametreli ürün URL'leri ve `amzn.eu` kısa paylaşım bağlantıları desteklenir.
-2. **Ürün ekle** düğmesine basın. Amazon Türkiye erişimi fiyat sorgusu için; `amzn.eu` erişimi yalnızca kısa bağlantıyı çözmek için istenir. İlk fiyat sorgusu başarısız olsa bile ürün listede kalır.
+1. Amazon erişim izinlerinden biri eksikse popup önce karşılama/izin tamamlama ekranını gösterir. **Amazon erişimini etkinleştir** düğmesine basıp Chrome'un izin penceresini onaylayın. Bu tek tıklama, eksik olan `https://www.amazon.com.tr/*` ve `https://amzn.eu/*` izinlerini ister. Ürün bağlantısını ancak normal ekran açıldıktan sonra girin.
+2. `/dp/ASIN`, `/gp/product/ASIN`, başlıklı/izleme parametreli ürün URL'leri ve `amzn.eu` kısa paylaşım bağlantıları desteklenir. **Ürün ekle** düğmesine basın. İki izin onboarding sırasında verildiyse iki bağlantı türü de ek bir izin istemi açmadan çalışır. İlk fiyat sorgusu başarısız olsa bile ürün listede kalır.
 3. **Otomatik kontrol** varsayılan olarak açıktır. Popup'taki anahtarla kapatıp yeniden açabilirsiniz. Her ürünün **Fiyatı kontrol et** düğmesiyle istediğiniz zaman elle kontrol başlatabilirsiniz. Başarısız kontrol son başarılı fiyatı ve başlığı korur; fiyatı “güncel değil” olarak gösterir. **Listeden kaldır** yalnızca seçilen ürünü siler.
 4. İzleme listesi popup kapanıp açılsa da `chrome.storage.local` içinde kalır. Aynı ASIN yeniden eklenirse yinelenen kayıt oluşturulmaz.
 5. Comet'te yükleme mümkünse aynı işlemleri deneyin ve uzantı hata ekranını kontrol edin.
 
-Hiçbir Amazon sekmesi açılmaz. Düğme tıklanınca izin istenir, servis çalışanı kimlik bilgileri olmadan kanonik URL'ye `fetch` yapar, HTML uzantının görünmeyen offscreen belgesindeki `DOMParser` ile incelenir. Bu belge **canlı bir Amazon sayfasını açıp çalıştırmaz**; Amazon'un istemci tarafında sonradan oluşturduğu fiyatları görmeyebilir.
+Hiçbir Amazon sekmesi açılmaz. Her iki site izni yalnızca karşılama ekranındaki açık düğmeyle, eksik origin'ler için istenir; izin verilmesi tek başına ürün sorgusu başlatmaz. Sadece Amazon Türkiye izni olan eski kurulumlarda normal arayüz açılmaz; eksik `amzn.eu` izni açıkça tamamlatılır. Popup'ta izinlerden biri eksik hale gelirse ürün gönderimi izin istemi açmak yerine onboarding'e döner ve girilmiş URL popup açık kaldığı sürece korunur. Servis çalışanı ürün eklendiğinde veya kontrol istendiğinde kimlik bilgileri olmadan kanonik URL'ye `fetch` yapar, HTML uzantının görünmeyen offscreen belgesindeki `DOMParser` ile incelenir. Bu belge **canlı bir Amazon sayfasını açıp çalıştırmaz**; Amazon'un istemci tarafında sonradan oluşturduğu fiyatları görmeyebilir.
+
+### İlk açılış izni doğrulaması
+
+Chrome'da uzantıyı temiz bir profilde yükleyip popup'ı açın: ürün formu yerine karşılama görünmelidir. İzin düğmesine basın ve iki origin'i onaylayın; Chrome popup'ı kapatırsa yeniden açınca normal liste görünmelidir. Sonra standart Amazon ürünü ve `amzn.eu` linki ekleyin; ikisi de ikinci izin istemi açmadan ilerlemelidir. Ayrıca yalnızca Amazon izni olan eski bir kurulumla açıp eksik `amzn.eu` erişiminin istendiğini, tek origin'in tamamlanabildiğini doğrulayın. İzin isteğini reddedip yeniden deneyin; Amazon izinlerinden birini `chrome://extensions` içinden kaldırıp tekrar açın ve ürünlerin korunduğunu kontrol edin. Comet'te aynı adımları, uzantı yönetimi ve izin API'leri destekleniyorsa uygulayın. Chrome'un native izin ekranı sırasında popup'ı kapatıp kapatmaması ve Comet davranışı gerçek tarayıcıda doğrulanmalıdır; otomatik testler bunları taklit eder.
 
 ### Yerel veri şeması
 

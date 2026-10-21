@@ -8,32 +8,42 @@
   </head>
   <body>
     <main>
-      <header>
-        <h1>FiyatNöbeti</h1>
-        <p class="intro">Amazon Türkiye fiyat takipçisi</p>
-      </header>
-      <div class="auto-control">
-        <label for="auto-enabled">Otomatik kontrol <span>6 saatte bir</span></label>
-        <input id="auto-enabled" type="checkbox" aria-describedby="auto-note auto-status">
-        <span id="auto-mode">Yükleniyor…</span>
-      </div>
-      <p id="auto-note" class="auto-note">Chrome çalışırken kontrol edilir; tarayıcı geciktirebilir. Chrome kapalıyken kontrol yapılmaz.</p>
-      <p id="auto-status" class="auto-status" role="status" aria-live="polite"></p>
-      <form id="add-form">
-        <label for="product-url">Amazon ürün bağlantısı</label>
-        <input id="product-url" type="url" required spellcheck="false"
-          placeholder="https://www.amazon.com.tr/dp/B0FZ9Y4GPF">
-        <p id="short-link-notice" class="notice" role="note" aria-live="polite" hidden>
-          Yalnızca Amazon uygulamasından veya sitesinden kendiniz kopyaladığınız, güvendiğiniz ürün bağlantılarını kullanın.
-        </p>
-        <button id="add-button" type="submit">Ürün ekle</button>
-      </form>
-      <p id="status" role="status" aria-live="polite"></p>
-      <section aria-labelledby="watchlist-heading">
-        <h2 id="watchlist-heading">İzleme listeniz</h2>
-        <p id="empty-state" class="empty">Henüz ürün eklenmedi.</p>
-        <ul id="products" aria-label="İzlenen ürünler"></ul>
+      <p id="permission-loading" role="status" aria-live="polite">İzin durumu kontrol ediliyor…</p>
+      <section id="permission-onboarding" aria-labelledby="onboarding-heading" hidden>
+        <h1 id="onboarding-heading">FiyatNöbeti'ne hoş geldiniz</h1>
+        <p id="permission-explanation">Amazon Türkiye ürünlerini ve kısa paylaşım bağlantılarını takip edebilmek için Amazon erişim izni gerekiyor.</p>
+        <button id="permission-button" type="button">Amazon erişimini etkinleştir</button>
+        <p class="permission-note">Desteklenen siteler: amazon.com.tr ve amzn.eu.</p>
+        <p id="permission-status" class="permission-status" role="status" aria-live="polite"></p>
       </section>
+      <div id="normal-view" hidden>
+        <header>
+          <h1>FiyatNöbeti</h1>
+          <p class="intro">Amazon Türkiye fiyat takipçisi</p>
+        </header>
+        <div class="auto-control">
+          <label for="auto-enabled">Otomatik kontrol <span>6 saatte bir</span></label>
+          <input id="auto-enabled" type="checkbox" aria-describedby="auto-note auto-status">
+          <span id="auto-mode">Yükleniyor…</span>
+        </div>
+        <p id="auto-note" class="auto-note">Chrome çalışırken kontrol edilir; tarayıcı geciktirebilir. Chrome kapalıyken kontrol yapılmaz.</p>
+        <p id="auto-status" class="auto-status" role="status" aria-live="polite"></p>
+        <form id="add-form">
+          <label for="product-url">Amazon ürün bağlantısı</label>
+          <input id="product-url" type="url" required spellcheck="false"
+            placeholder="https://www.amazon.com.tr/dp/B0FZ9Y4GPF">
+          <p id="short-link-notice" class="notice" role="note" aria-live="polite" hidden>
+            Yalnızca Amazon uygulamasından veya sitesinden kendiniz kopyaladığınız, güvendiğiniz ürün bağlantılarını kullanın.
+          </p>
+          <button id="add-button" type="submit">Ürün ekle</button>
+        </form>
+        <p id="status" role="status" aria-live="polite"></p>
+        <section id="watchlist-section" aria-labelledby="watchlist-heading">
+          <h2 id="watchlist-heading">İzleme listeniz</h2>
+          <p id="empty-state" class="empty">Henüz ürün eklenmedi.</p>
+          <ul id="products" aria-label="İzlenen ürünler"></ul>
+        </section>
+      </div>
     </main>
     <script type="module" src="popup.js"></script>
   </body>
