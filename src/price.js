@@ -2,6 +2,13 @@ const PRIMARY_SELECTOR = "#corePrice_feature_div .a-offscreen";
 const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
 const MAX_PRICE_ANCESTORS = 6;
 
+export function extractProductTitle(doc) {
+  const candidate = doc.querySelector("#productTitle")?.textContent;
+  if (typeof candidate !== "string") return null;
+  const title = candidate.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return title && title.length <= 200 && /[\p{L}\p{N}]/u.test(title) ? title : null;
+}
+
 function isUnitPriceCandidate(candidate) {
   let ancestor = candidate?.parentElement;
   for (let depth = 0; ancestor && depth < MAX_PRICE_ANCESTORS; depth++, ancestor = ancestor.parentElement) {
