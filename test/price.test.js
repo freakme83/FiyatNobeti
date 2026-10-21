@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractPrimaryPrice, parseTurkishPrice } from "../src/price.js";
+import { extractPrimaryPrice, extractProductTitle, parseTurkishPrice } from "../src/price.js";
 
 // Small synthetic HTML tree with parentElement/classList relationships like DOMParser nodes.
 // Browser DOMParser integration remains a manual test, as Node has no built-in HTML DOM.
@@ -67,6 +67,7 @@ function fixture(html) {
     querySelector(selector) {
       if (selector === "#corePrice_feature_div") return findById("corePrice_feature_div");
       if (selector === "#ap_email") return findById("ap_email");
+      if (selector === "#productTitle") return findById("productTitle");
       throw new Error("Unexpected selector: " + selector);
     },
     querySelectorAll(selector) {
@@ -201,4 +202,11 @@ test("classifies bot checks, access denied, and sign-in pages before price extra
     { status: "failure", errorCode: "ACCESS_DENIED" });
   assert.deepEqual(extractPrimaryPrice(fixture('<title>Amazon Sign-In</title><input id="ap_email">')),
     { status: "failure", errorCode: "AUTH_REQUIRED" });
+});
+
+test("extracts only a validated, normalized product title from the targeted title node", () => {
+  assert.equal(extractProductTitle(fixture('<span id="productTitle">  DJI   Lito X1 <b>Fly More</b> </span>')), "DJI Lito X1 Fly More");
+  assert.equal(extractProductTitle(fixture('<span id="productTitle"> \u0000 </span>')), null);
+  assert.equal(extractProductTitle(fixture(`<span id="productTitle">${"x".repeat(201)}</span>`)), null);
+  assert.equal(extractProductTitle(fixture('<span class="recommendation-title">Önerilen ürün</span>')), null);
 });

@@ -1,6 +1,6 @@
 # FiyatNöbeti
 
-Amazon Türkiye ürün bağlantısı için **yalnızca elle başlatılan** fiyat sorgusunun deneysel Chrome Manifest V3 prototipi. Çoklu ürün takibi, zamanlanmış kontroller ve bildirimler bu sürümde yoktur.
+Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını **elle** kontrol eden deneysel Chrome Manifest V3 uzantısı. Zamanlanmış kontroller ve bildirimler bu sürümde yoktur.
 
 ## Yükleme
 
@@ -8,14 +8,23 @@ Amazon Türkiye ürün bağlantısı için **yalnızca elle başlatılan** fiyat
 
 **Perplexity Comet:** Comet'in Chromium uzantı yönetimi ekranı paketlenmemiş uzantı yüklemeyi sunuyorsa geliştirici modunu açıp aynı depo klasörünü seçin. Comet'in bu API'leri desteklediği henüz doğrulanmadı; yükleme seçeneği veya `chrome.offscreen` yoksa prototip orada çalışmayabilir.
 
-## Elle fiyat sorgusu
+## Yerel izleme listesi
 
-1. Uzantı simgesine tıklayın. Örnek olarak `https://www.amazon.com.tr/dp/B0FZ9Y4GPF` bağlantısını girin.
-2. **Fiyatı kontrol et** düğmesine basın. İlk sorguda yalnızca `https://www.amazon.com.tr/*` için site erişimini onaylayın.
-3. Açılır pencerede fiyatı veya hata nedenini, ASIN'i ve kontrol zamanını inceleyin. `chrome://extensions` sayfasındaki uzantının **Service worker** bağlantısından teknik hataları görebilirsiniz. Son kontrol ve son başarılı kontrol ayrıca `chrome.storage.local` içinde tutulur; önceki başarılı fiyat “güncel değil” olarak gösterilir.
-4. Comet'te yükleme mümkünse aynı işlemleri uzantı simgesinden deneyin ve uzantı hata ekranını kontrol edin.
+1. Uzantı simgesini açıp bir Amazon Türkiye ürün bağlantısı yapıştırın. `/dp/ASIN`, `/gp/product/ASIN`, başlıklı/izleme parametreli ürün URL'leri ve `amzn.eu` kısa paylaşım bağlantıları desteklenir.
+2. **Ürün ekle** düğmesine basın. Amazon Türkiye erişimi fiyat sorgusu için; `amzn.eu` erişimi yalnızca kısa bağlantıyı çözmek için istenir. İlk fiyat sorgusu başarısız olsa bile ürün listede kalır.
+3. Her ürünün **Fiyatı kontrol et** düğmesiyle tek tek yeni kontrol başlatın. Başarısız kontrol son başarılı fiyatı ve başlığı korur; fiyatı “güncel değil” olarak gösterir. **Listeden kaldır** yalnızca seçilen ürünü siler.
+4. İzleme listesi popup kapanıp açılsa da `chrome.storage.local` içinde kalır. Aynı ASIN yeniden eklenirse yinelenen kayıt oluşturulmaz.
+5. Comet'te yükleme mümkünse aynı işlemleri deneyin ve uzantı hata ekranını kontrol edin.
 
 Hiçbir Amazon sekmesi açılmaz. Düğme tıklanınca izin istenir, servis çalışanı kimlik bilgileri olmadan kanonik URL'ye `fetch` yapar, HTML uzantının görünmeyen offscreen belgesindeki `DOMParser` ile incelenir. Bu belge **canlı bir Amazon sayfasını açıp çalıştırmaz**; Amazon'un istemci tarafında sonradan oluşturduğu fiyatları görmeyebilir.
+
+### Yerel veri şeması
+
+`chrome.storage.local` içindeki `watchlist` kaydı `{ version: 1, products: { [ASIN]: product } }` biçimindedir. Ürün kaydı kanonik URL, doğrulanmış başlık (varsa), son başarılı TRY fiyatı ve zamanı, son deneme zamanı, son kontrol durumu/hata kodu ve eklenme zamanını içerir. ASIN tekil anahtardır. Eski tek ürün prototipindeki son başarılı kayıt varsa ilk liste okumasında mevcut veriyi korumak için şemaya taşınır. Ürün HTML'i veya kısa link/izleme parametreleri saklanmaz.
+
+Ürün başlığı aynı fiyat kontrolü için alınmış HTML'deki yalnızca `#productTitle` öğesinden okunur, boşlukları düzenlenir ve en fazla 200 karakter kabul edilir. Bulunamazsa `Amazon ürünü` gösterilir ve ASIN ikincil bilgi olarak sunulur. Popup başlığı HTML olarak değil, güvenli metin düğümü olarak işler.
+
+Otomatik/periyodik kontroller, bildirimler ve geçmiş fiyat grafikleri henüz uygulanmadı. Fiyat güncellemesi kullanıcı eylemiyle başlar.
 
 ## Desteklenen bağlantılar
 
@@ -33,11 +42,11 @@ Kısa bağlantı çözümleme denemesi artık `redirect: "follow"` kullanır; Ch
 
 ## Fiyat ve sınırlar
 
-21 Ekim 2026'da ürün sayfasında elle çalıştırılan `document.querySelector("#corePrice_feature_div .a-offscreen")?.textContent?.trim()` ifadesi `36.399,00TL` sonucunu verdi. Bu, **açık canlı sayfanın DOM'u** üzerindeki gözlemdir. 36.399,00 TL sabit bir beklenen fiyat değildir. Uzantının **arka planda alınan HTML** ile çalışacağı Chrome veya Comet üzerinde henüz doğrulanmadı.
+21 Ekim 2026'da açık ürün sayfasındaki elle çalıştırılan `document.querySelector("#corePrice_feature_div .a-offscreen")?.textContent?.trim()` ifadesi `36.399,00TL` sonucunu verdi. Bu, canlı sayfa DOM'undaki gözlemdir; 36.399,00 TL sabit beklenen fiyat değildir. Ayrıca kullanıcı gerçek Chrome testlerinde doğrudan/uzun ürün URL'leri, kısa bağlantı çözümleme ve görünür Amazon sekmesi açmadan arka plan fiyat sorgusunu doğruladı. Comet davranışı ayrıca doğrulanmalıdır.
 
 Yalnızca `#corePrice_feature_div .a-offscreen` içindeki satış fiyatı adayı kabul edilir. Adayın üst DOM öğelerinden birinde `apex-priceperuni` ile başlayan ayrı bir sınıf token'ı varsa bu bilinen birim fiyatı bileşeni dışarıda bırakılır; birim fiyatı asla ürün satış fiyatı olarak kullanılmaz. Birden fazla satış fiyatı adayı kalırsa sonuç yine belirsiz sayılır. Reklam, öneri, eski fiyat veya taksit tutarına geçilmez. Fiyat bulunamazsa veya Amazon robot doğrulaması, erişim engeli, oturum açma, HTTP hatası, yönlendirme ya da ağ hatası dönerse sorgu başarısız kaydedilir. Başarısız sonuç eski başarılı fiyatı değiştirmez. Giriş yapılmış tarayıcı oturumunun çerezleri gönderilmez; dolayısıyla kullanıcıya özel fiyatlar görülemeyebilir. CAPTCHA aşma veya görünür sekme çözümü yoktur.
 
-Manifest `storage`, `offscreen` ve iki isteğe bağlı site erişimi içerir: `https://www.amazon.com.tr/*` ve `https://amzn.eu/*`. Normal ürün URL'si yalnızca Amazon Türkiye iznini ister; `amzn.eu` izni yalnızca kısa bağlantı girildiğinde istenir. Tarama geçmişi, çerez API'si, diğer siteler, uzak kod, sunucu hesabı veya telemetri kullanılmaz. HTML saklanmaz; yalnızca son sorgunun ASIN/bağlantısı, kanonik URL (belirlenebildiyse), durum, zaman ve gerekliyse fiyat veya güvenli hata kodu saklanır.
+Manifest `storage`, `offscreen` ve iki isteğe bağlı site erişimi içerir: `https://www.amazon.com.tr/*` ve `https://amzn.eu/*`. Normal ürün URL'si `amzn.eu` erişimi istemez; bu izin yalnızca kısa bağlantı girildiğinde istenir. Tarama geçmişi, çerez API'si, diğer siteler, uzak kod, sunucu hesabı veya telemetri kullanılmaz. HTML saklanmaz; yalnızca watchlist kayıtları ve önceki prototiple uyum için son tekil sorgu tanısı tutulur.
 
 ## Uzun ve kısa bağlantıları elle deneme
 
@@ -61,4 +70,4 @@ Otomatik testler yalnızca sahte Fetch yanıtları kullanır. Gerçek Chrome vey
 
 ## Testler
 
-Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu gerekmez. Testler sentetik HTML örnekleri ve DOM'un test uyarlaması ile fiyat seçme mantığını dener; gerçek Amazon ağına bağlanmaz. Gerçek tarayıcıda manifest yüklenmesi, offscreen DOMParser ve ağ yanıtı ayrıca elle doğrulanmalıdır.
+Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu gerekmez. Testler sentetik HTML örnekleri ve taklit Chrome storage/permission/fetch API'leri kullanır; gerçek Amazon ağına bağlanmaz. Chrome'da `chrome://extensions` sayfasından **Paketlenmemiş öğe yükle** ile depo klasörünü seçin. Ardından popup'ta en az iki ürün ekleyin, popup'ı kapatıp açın, bir ürünü yenileyin ve diğerini kaldırın. Ayrıca bir kontrolü Amazon erişimi reddedilerek veya geçersiz ürünle başarısız ettirip son başarılı fiyatın korunup “güncel değil” etiketini aldığını denetleyin. Comet'te aynı akış, yalnızca paketlenmemiş uzantı yükleme ile gerekli MV3 API'leri destekleniyorsa denenebilir. Otomatik kontroller ve bildirimler bu PR'da yoktur.
