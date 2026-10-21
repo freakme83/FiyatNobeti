@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "description": "Amazon Türkiye için elle başlatılan deneysel fiyat sorgusu.",
   "permissions": ["storage", "offscreen"],
-  "optional_host_permissions": ["https://www.amazon.com.tr/*"],
+  "optional_host_permissions": [
+    "https://www.amazon.com.tr/*",
+    "https://amzn.eu/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -14,6 +17,6 @@
     "default_popup": "popup.html"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; img-src 'none'; frame-src 'none'; connect-src https://www.amazon.com.tr"
+    "extension_pages": "script-src 'self'; object-src 'none'; img-src 'none'; frame-src 'none'; connect-src https://www.amazon.com.tr https://amzn.eu"
   }
 }

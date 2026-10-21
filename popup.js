@@ -1,6 +1,7 @@
-import { normalizeAmazonUrl } from "./src/url.js";
+import { parseAmazonInput } from "./src/url.js";
 
 const origin = "https://www.amazon.com.tr/*";
+const shortLinkOrigin = "https://amzn.eu/*";
 const form = document.querySelector("#probe-form");
 const input = document.querySelector("#product-url");
 const button = document.querySelector("#check-button");
@@ -9,9 +10,15 @@ const latest = document.querySelector("#latest");
 const previous = document.querySelector("#previous");
 
 const errors = {
-  INVALID_URL: "Geçerli bir Amazon Türkiye ürün bağlantısı girin.",
-  UNSUPPORTED_URL: "Yalnızca /dp/ASIN ve /gp/product/ASIN bağlantıları destekleniyor.",
-  PERMISSION_REQUIRED: "Amazon Türkiye erişimine izin verilmedi. Yeniden deneyebilirsiniz.",
+  INVALID_URL: "Güvenli ve geçerli bir Amazon bağlantısı girin.",
+  UNSUPPORTED_URL: "Bu Amazon bağlantı biçimi desteklenmiyor.",
+  UNSUPPORTED_MARKETPLACE: "Bu bağlantı Amazon Türkiye'ye ait değil.",
+  PERMISSION_REQUIRED: "Amazon Türkiye izni verilmedi.",
+  SHORT_LINK_PERMISSION_REQUIRED: "Kısa Amazon bağlantısı izni verilmedi.",
+  SHORT_LINK_RESOLUTION_FAILED: "Kısa Amazon bağlantısı çözümlenemedi.",
+  SHORT_LINK_REDIRECT_LOOP: "Kısa bağlantıda yönlendirme döngüsü algılandı.",
+  SHORT_LINK_TOO_MANY_REDIRECTS: "Kısa bağlantı çok fazla kez yönlendirildi.",
+  UNSAFE_REDIRECT: "Kısa bağlantı güvenli olmayan bir adrese yönlendirildi.",
   REDIRECT: "Amazon sayfayı başka bir adrese yönlendirdi; fiyat doğrulanamadı.",
   ACCESS_DENIED: "Amazon erişimi reddetti.",
   BOT_VERIFICATION: "Amazon robot doğrulaması istedi; fiyat okunamadı.",
@@ -68,20 +75,25 @@ async function restore() {
 
 form.addEventListener("submit", async event => {
   event.preventDefault();
+  let request;
   try {
-    normalizeAmazonUrl(input.value);
+    request = parseAmazonInput(input.value);
   } catch (error) {
     status.textContent = errors[error.message] || errors.INVALID_URL;
     return;
   }
 
   button.disabled = true;
-  status.textContent = "Fiyat kontrol ediliyor…";
+  status.textContent = request.type === "short"
+    ? "Amazon bağlantısı çözümleniyor…"
+    : "Fiyat kontrol ediliyor…";
   try {
+    const origins = request.type === "short" ? [origin, shortLinkOrigin] : [origin];
     // İzin isteme çağrısı doğrudan kullanıcının tıklamasıyla başlar.
-    try { await chrome.permissions.request({ origins: [origin] }); } catch { /* worker kaydeder */ }
+    try { await chrome.permissions.request({ origins }); } catch { /* worker kaydeder */ }
     const result = await chrome.runtime.sendMessage({ type: "CHECK_PRICE", url: input.value });
     if (!result || !["success", "failure"].includes(result.status)) throw new Error("BAD_RESPONSE");
+    if (result.canonicalUrl) input.value = result.canonicalUrl;
     status.textContent = result.storageError ? "Kontrol tamamlandı ancak sonuç yerel olarak kaydedilemedi." : "Kontrol tamamlandı.";
     const { lastCheck, lastSuccess } = await chrome.storage.local.get(["lastCheck", "lastSuccess"]);
     render(result.storageError ? result : lastCheck, lastSuccess);

@@ -1,6 +1,8 @@
-import { normalizeAmazonUrl } from "./src/url.js";
+import { parseAmazonInput } from "./src/url.js";
+import { resolveAmazonShortLink } from "./src/shortlink.js";
 
 const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
+const SHORT_LINK_ORIGIN = "https://amzn.eu/*";
 const OFFSCREEN_PATH = "offscreen.html";
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 let creatingOffscreen;
@@ -40,18 +42,44 @@ async function readLimitedHtml(response) {
 }
 
 async function probe(input) {
-  let product;
+  let requested;
   try {
-    product = normalizeAmazonUrl(input);
+    requested = parseAmazonInput(input);
   } catch (error) {
-    return { status: "failure", errorCode: error.message === "UNSUPPORTED_URL" ? "UNSUPPORTED_URL" : "INVALID_URL" };
+    return { status: "failure", errorCode: error.message };
   }
 
-  const result = { ...product, checkedAt: new Date().toISOString(), status: "failure" };
+  const result = {
+    ...(requested.type === "product"
+      ? { asin: requested.asin, canonicalUrl: requested.canonicalUrl }
+      : { inputUrl: requested.shortUrl }),
+    checkedAt: new Date().toISOString(),
+    status: "failure"
+  };
   try {
-    if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
+    let product = requested;
+    if (requested.type === "short") {
+      if (!await chrome.permissions.contains({ origins: [SHORT_LINK_ORIGIN] })) {
+        result.errorCode = "SHORT_LINK_PERMISSION_REQUIRED";
+      } else {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        try {
+          product = await resolveAmazonShortLink(requested.shortUrl, { signal: controller.signal });
+          result.asin = product.asin;
+          result.canonicalUrl = product.canonicalUrl;
+          delete result.inputUrl;
+        } catch (error) {
+          result.errorCode = error.message || "SHORT_LINK_RESOLUTION_FAILED";
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    }
+
+    if (!result.errorCode && !await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
       result.errorCode = "PERMISSION_REQUIRED";
-    } else {
+    } else if (!result.errorCode) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 20000);
       try {

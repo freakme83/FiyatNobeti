@@ -13,6 +13,8 @@ let listener;
 let permission = true;
 let fetchResult;
 let fetched;
+let fetchHandler;
+let permissionChecks = [];
 globalThis.chrome = {
   runtime: {
     id: "test-extension",
@@ -23,15 +25,20 @@ globalThis.chrome = {
       return { status: "success", priceTry: 36000 };
     }
   },
-  permissions: { async contains() { return permission; } },
+  permissions: { async contains({ origins }) {
+    permissionChecks.push(...origins);
+    return permission && !origins.some(origin => deniedOrigins.has(origin));
+  } },
   offscreen: {
     async hasDocument() { return true; },
     async createDocument() { throw new Error("unexpected"); }
   },
   storage: { local: { async set(value) { Object.assign(stored, value); } } }
 };
+const deniedOrigins = new Set();
 globalThis.fetch = async (url, options) => {
   fetched = { url, options };
+  if (fetchHandler) return fetchHandler(url, options);
   return fetchResult;
 };
 await import("../background.js");
@@ -73,5 +80,52 @@ test("missing permission is saved and never triggers a fetch", async () => {
   const result = await check();
   assert.equal(result.errorCode, "PERMISSION_REQUIRED");
   assert.equal(fetched, undefined);
+  assert.deepEqual(stored.lastSuccess, previous);
+});
+
+test("short links request short-host access only on short-link checks", async () => {
+  permission = true;
+  deniedOrigins.clear();
+  permissionChecks = [];
+  fetchHandler = async () => { throw new Error("network should not be reached"); };
+  const normal = await check(previous.canonicalUrl);
+  assert.equal(normal.status, "failure");
+  assert.deepEqual(permissionChecks, ["https://www.amazon.com.tr/*"]);
+
+  permissionChecks = [];
+  deniedOrigins.add("https://amzn.eu/*");
+  const short = await check("https://amzn.eu/d/02JpD8hn");
+  assert.equal(short.errorCode, "SHORT_LINK_PERMISSION_REQUIRED");
+  assert.deepEqual(permissionChecks, ["https://amzn.eu/*"]);
+  assert.deepEqual(stored.lastSuccess, previous);
+  assert.equal(stored.lastCheck.inputUrl, "https://amzn.eu/d/02JpD8hn");
+});
+
+test("short-link network failure is explicit and preserves the last valid price", async () => {
+  permission = true;
+  deniedOrigins.clear();
+  stored.lastSuccess = previous;
+  fetchHandler = async () => { throw new Error("offline"); };
+  const result = await check("https://amzn.eu/d/02JpD8hn");
+  assert.equal(result.errorCode, "SHORT_LINK_RESOLUTION_FAILED");
+  assert.deepEqual(stored.lastSuccess, previous);
+  assert.equal(stored.lastCheck.inputUrl, "https://amzn.eu/d/02JpD8hn");
+});
+
+test("after safe resolution, missing Amazon Türkiye permission prevents the price fetch", async () => {
+  permission = true;
+  deniedOrigins.clear();
+  deniedOrigins.add("https://www.amazon.com.tr/*");
+  let networkRequests = [];
+  fetchHandler = async (url, options) => {
+    networkRequests.push(url);
+    return new Response(null, {
+      status: 302,
+      headers: { location: "https://www.amazon.com.tr/dp/B0CQXKXBR7" }
+    });
+  };
+  const result = await check("https://amzn.eu/d/02JpD8hn");
+  assert.equal(result.errorCode, "PERMISSION_REQUIRED");
+  assert.deepEqual(networkRequests, ["https://amzn.eu/d/02JpD8hn"]);
   assert.deepEqual(stored.lastSuccess, previous);
 });
