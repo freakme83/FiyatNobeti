@@ -7,6 +7,11 @@ import {
   normalizeWatchlist,
   WATCHLIST_KEY
 } from "./src/watchlist.js";
+import {
+  AUTO_ALARM_NAME, AUTO_INTERVAL_MS, AUTO_PACE_MS, AUTO_SETTINGS_KEY, AUTO_STATE_KEY,
+  defaultAutoState, defaultAutoSettings, nextEligibleAt, normalizeAutoSettings,
+  normalizeAutoState, timestampMs
+} from "./src/automatic.js";
 
 const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
 const SHORT_LINK_ORIGIN = "https://amzn.eu/*";
@@ -25,6 +30,7 @@ let watchlistMutationQueue = Promise.resolve();
 const inFlightChecks = new Map();
 const productInstances = new Map();
 let nextProductInstance = 0;
+let automaticRun;
 
 function shortLinkDiagnostics(error) {
   const diagnostics = {};
@@ -201,7 +207,7 @@ function productInstance(asin) {
   return identity;
 }
 
-async function checkWatchlistProduct(asin) {
+async function checkWatchlistProduct(asin, { automatic = false, expectedIdentity } = {}) {
   if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) return { status: "failure", errorCode: "INVALID_PRODUCT" };
   asin = asin.toUpperCase();
   let flightKey;
@@ -212,6 +218,12 @@ async function checkWatchlistProduct(asin) {
       const product = watchlist.products[asin];
       if (!product) return { missing: true };
       const identity = productInstance(asin);
+      if (automatic) {
+        const settings = await readAutoSettings();
+        const state = await readAutoState();
+        if (!settings.enabled || identity !== expectedIdentity ||
+            nextEligibleAt(product, state.unknownSince[asin]) > Date.now()) return { skipped: true };
+      }
       flightKey = `${asin}:${identity}`;
       if (inFlightChecks.has(flightKey)) return { busy: true };
 
@@ -231,6 +243,7 @@ async function checkWatchlistProduct(asin) {
     });
     if (start.missing) return { status: "failure", asin, errorCode: "PRODUCT_NOT_FOUND" };
     if (start.busy) return { status: "busy", asin };
+    if (start.skipped) return { status: "skipped", asin };
 
     const fetched = await fetchProduct(start.canonicalUrl);
     const checkedAt = new Date().toISOString();
@@ -305,8 +318,176 @@ async function recoverInterruptedChecks() {
   });
 }
 
+async function readAutoSettings() {
+  const stored = await chrome.storage.local.get(AUTO_SETTINGS_KEY);
+  const settings = normalizeAutoSettings(stored[AUTO_SETTINGS_KEY]);
+  if (stored[AUTO_SETTINGS_KEY] === undefined) await chrome.storage.local.set({ [AUTO_SETTINGS_KEY]: settings });
+  return settings;
+}
+
+async function readAutoState() {
+  const stored = await chrome.storage.local.get(AUTO_STATE_KEY);
+  return normalizeAutoState(stored[AUTO_STATE_KEY]);
+}
+
+async function saveAutoState(state) {
+  await chrome.storage.local.set({ [AUTO_STATE_KEY]: state });
+}
+
+function prepareEligibility(watchlist, state, now) {
+  for (const asin of Object.keys(state.unknownSince)) {
+    if (!watchlist.products[asin]) delete state.unknownSince[asin];
+  }
+  return Object.values(watchlist.products).map(product => {
+    if (timestampMs(product.lastAttemptedCheckAt) !== null || timestampMs(product.addedAt) !== null) {
+      delete state.unknownSince[product.asin];
+    } else if (!state.unknownSince[product.asin]) {
+      state.unknownSince[product.asin] = new Date(now).toISOString();
+    }
+    return { asin: product.asin, dueAt: nextEligibleAt(product, state.unknownSince[product.asin]) };
+  }).sort((left, right) => left.dueAt - right.dueAt || left.asin.localeCompare(right.asin));
+}
+
+async function scheduleAutomaticLocked(now = Date.now()) {
+  const settings = await readAutoSettings();
+  const state = await readAutoState();
+  if (!settings.enabled) {
+    if (state.nextRunAt !== null) {
+      state.nextRunAt = null;
+      await saveAutoState(state);
+    }
+    await chrome.alarms.clear(AUTO_ALARM_NAME);
+    return { settings, state };
+  }
+  if (state.lastErrorCode === "PERMISSION_REQUIRED" &&
+      await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
+    state.lastErrorCode = null;
+    state.notBefore = null;
+  }
+  const products = prepareEligibility(await readWatchlist(), state, now);
+  const earliestDue = products[0]?.dueAt ?? timestampMs(state.nextRunAt) ?? now + AUTO_INTERVAL_MS;
+  const rawDue = Math.max(earliestDue, timestampMs(state.notBefore) ?? 0);
+  const existing = await chrome.alarms.get(AUTO_ALARM_NAME);
+  const previous = timestampMs(state.nextRunAt);
+  const alarmMatchesState = existing && previous !== null && Math.abs(existing.scheduledTime - previous) < 1000;
+  const stillAppropriate = previous !== null && previous >= rawDue - 1000 &&
+    previous <= Math.max(rawDue, now) + AUTO_PACE_MS + 1000;
+  if (alarmMatchesState && stillAppropriate) {
+    await saveAutoState(state);
+    return { settings, state };
+  }
+  const when = !existing && stillAppropriate && previous > now
+    ? previous
+    : Math.max(rawDue, now + AUTO_PACE_MS);
+  state.nextRunAt = new Date(when).toISOString();
+  await saveAutoState(state);
+  await chrome.alarms.create(AUTO_ALARM_NAME, { when });
+  return { settings, state };
+}
+
+function reconcileAutomaticSchedule() {
+  return withWatchlistLock(() => scheduleAutomaticLocked());
+}
+
+async function getAutoSettings() {
+  return withWatchlistLock(async () => {
+    const { settings, state } = await scheduleAutomaticLocked();
+    return { status: "success", settings, errorCode: state.lastErrorCode };
+  });
+}
+
+async function setAutoEnabled(enabled) {
+  if (typeof enabled !== "boolean") return { status: "failure", errorCode: "INVALID_SETTING" };
+  return withWatchlistLock(async () => {
+    const settings = { ...await readAutoSettings(), enabled };
+    await chrome.storage.local.set({ [AUTO_SETTINGS_KEY]: settings });
+    const state = await readAutoState();
+    state.nextRunAt = null;
+    if (enabled) {
+      state.lastErrorCode = null;
+      state.notBefore = null;
+    }
+    await saveAutoState(state);
+    await scheduleAutomaticLocked();
+    return { status: "success", settings };
+  });
+}
+
+async function runAutomaticAlarm() {
+  if (automaticRun) {
+    await withWatchlistLock(async () => {
+      const state = await readAutoState();
+      state.notBefore = new Date(Date.now() + AUTO_PACE_MS).toISOString();
+      state.nextRunAt = null;
+      await saveAutoState(state);
+      await scheduleAutomaticLocked();
+    });
+    return;
+  }
+  automaticRun = (async () => {
+    const selected = await withWatchlistLock(async () => {
+      const settings = await readAutoSettings();
+      const state = await readAutoState();
+      if (!settings.enabled) {
+        await scheduleAutomaticLocked();
+        return null;
+      }
+      const now = Date.now();
+      if (timestampMs(state.nextRunAt) === null || now + 1000 < timestampMs(state.nextRunAt)) {
+        await scheduleAutomaticLocked(now);
+        return null;
+      }
+      const products = prepareEligibility(await readWatchlist(), state, now);
+      if (!products.length) {
+        state.notBefore = new Date(now + AUTO_INTERVAL_MS).toISOString();
+        state.nextRunAt = null;
+        await saveAutoState(state);
+        await scheduleAutomaticLocked(now);
+        return null;
+      }
+      if (products[0].dueAt > now) {
+        state.nextRunAt = null;
+        await saveAutoState(state);
+        await scheduleAutomaticLocked(now);
+        return null;
+      }
+      if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
+        state.lastErrorCode = "PERMISSION_REQUIRED";
+        state.notBefore = new Date(now + AUTO_INTERVAL_MS).toISOString();
+        state.nextRunAt = null;
+        await saveAutoState(state);
+        await scheduleAutomaticLocked(now);
+        return null;
+      }
+      const asin = products[0].asin;
+      const identity = productInstance(asin);
+      state.lastErrorCode = null;
+      state.notBefore = new Date(now + AUTO_PACE_MS).toISOString();
+      state.nextRunAt = null;
+      await saveAutoState(state);
+      await scheduleAutomaticLocked(now);
+      return { asin, identity };
+    });
+    if (!selected) return;
+    await checkWatchlistProduct(selected.asin, { automatic: true, expectedIdentity: selected.identity });
+    await reconcileAutomaticSchedule();
+  })();
+  try { await automaticRun; }
+  finally { automaticRun = undefined; }
+}
+
 let recoveryFailed = false;
 const startupRecovery = recoverInterruptedChecks().catch(() => { recoveryFailed = true; });
+startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== AUTO_ALARM_NAME) return;
+  return startupRecovery.then(() => { if (!recoveryFailed) return runAutomaticAlarm(); }).catch(() => {});
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  return startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
@@ -316,9 +497,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message?.type === "ADD_PRODUCT") runOperation = () => addProduct(message.url);
   else if (message?.type === "CHECK_PRODUCT") runOperation = () => checkWatchlistProduct(message.asin);
   else if (message?.type === "REMOVE_PRODUCT") runOperation = () => removeProduct(message.asin);
+  else if (message?.type === "GET_AUTO_SETTINGS") runOperation = () => getAutoSettings();
+  else if (message?.type === "SET_AUTO_ENABLED") runOperation = () => setAutoEnabled(message.enabled);
   else return;
   startupRecovery
     .then(() => recoveryFailed ? { status: "failure", errorCode: "STORAGE_ERROR" } : runOperation())
+    .then(async result => {
+      if (["ADD_PRODUCT", "CHECK_PRODUCT", "REMOVE_PRODUCT"].includes(message.type) && result?.status !== "failure") {
+        try { await reconcileAutomaticSchedule(); } catch { /* The completed user action remains valid. */ }
+      }
+      return result;
+    })
     .then(sendResponse)
     .catch(() => sendResponse({ status: "failure", errorCode: "STORAGE_ERROR" }));
   return true;

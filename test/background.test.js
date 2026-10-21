@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createProductRow, errorMessage } from "../src/watchlist-view.js";
-import { normalizeProductTitle } from "../src/watchlist.js";
+import { createProductRecord, normalizeProductTitle } from "../src/watchlist.js";
+import { AUTO_ALARM_NAME, AUTO_INTERVAL_MS, AUTO_PACE_MS } from "../src/automatic.js";
 
 const previous = {
   asin: "B0FZ9Y4GPF",
@@ -18,10 +19,15 @@ let fetched;
 let fetchHandler;
 let parseHandler;
 let permissionChecks = [];
+let alarmListener;
+let installedListener;
+const alarms = new Map();
+const alarmCreations = [];
 globalThis.chrome = {
   runtime: {
     id: "test-extension",
     onMessage: { addListener(fn) { listener = fn; } },
+    onInstalled: { addListener(fn) { installedListener = fn; } },
     async sendMessage(message) {
       assert.equal(message.type, "PARSE_HTML");
       assert.match(message.html, /corePrice_feature_div/);
@@ -33,6 +39,15 @@ globalThis.chrome = {
     permissionChecks.push(...origins);
     return permission && !origins.some(origin => deniedOrigins.has(origin));
   } },
+  alarms: {
+    onAlarm: { addListener(fn) { alarmListener = fn; } },
+    async get(name) { return alarms.get(name); },
+    async create(name, info) {
+      alarms.set(name, { name, scheduledTime: info.when });
+      alarmCreations.push({ name, ...info });
+    },
+    async clear(name) { return alarms.delete(name); }
+  },
   offscreen: {
     async hasDocument() { return true; },
     async createDocument() { throw new Error("unexpected"); }
@@ -77,11 +92,47 @@ const htmlResponse = (asin = "B0FZ9Y4GPF") => new Response(`<div id="corePrice_f
 });
 const resetWatchlist = async () => {
   stored.watchlist = { version: 1, products: {} };
+  stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 360 };
+  stored.automaticCheckState = { version: 1, nextRunAt: null, notBefore: null, unknownSince: {}, lastErrorCode: null };
+  alarms.clear();
+  alarmCreations.length = 0;
   fetchHandler = async () => htmlResponse();
   parseHandler = null;
   permission = true;
   deniedOrigins.clear();
 };
+
+async function fireAutomaticAlarm() {
+  const alarm = alarms.get(AUTO_ALARM_NAME);
+  assert.ok(alarm, "automatic alarm must exist");
+  alarms.delete(AUTO_ALARM_NAME);
+  await alarmListener(alarm);
+}
+
+async function withClock(start, task) {
+  const RealDate = globalThis.Date;
+  let now = Date.parse(start);
+  globalThis.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  };
+  try { return await task({ advance(ms) { now += ms; }, get now() { return now; } }); }
+  finally { globalThis.Date = RealDate; }
+}
+
+function seedProduct(asin, { attemptedAt = null, addedAt = "2026-10-20T00:00:00.000Z", status = "never" } = {}) {
+  const product = createProductRecord({ asin, canonicalUrl: productUrl(asin), addedAt });
+  product.lastAttemptedCheckAt = attemptedAt;
+  product.lastCheckStatus = status;
+  stored.watchlist.products[asin] = product;
+  return product;
+}
+
+function advanceToAlarm(clock) {
+  const alarm = alarms.get(AUTO_ALARM_NAME);
+  assert.ok(alarm);
+  clock.advance(Math.max(0, alarm.scheduledTime - clock.now));
+}
 
 test("background fetch is canonical, manual, credential-free and stores success", async () => {
   fetchResult = new Response('<div id="corePrice_feature_div"></div>', {
@@ -462,4 +513,234 @@ test("watchlist rendering treats untrusted titles as plain text", () => {
   assert.equal(row.children[0].children.length, 0);
   assert.equal(normalizeProductTitle(`  ${untrustedTitle}  `), untrustedTitle);
   assert.match(errorMessage("CHECK_INTERRUPTED"), /yeniden başladığı için kesildi/);
+});
+
+test("automatic checks default to six hours and restore only a missing owned alarm", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    delete stored.automaticChecks;
+    await installedListener();
+    const settings = await message("GET_AUTO_SETTINGS");
+    assert.deepEqual(settings.settings, { version: 1, enabled: true, intervalMinutes: 360 });
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    const count = alarmCreations.length;
+    await installedListener();
+    assert.equal(alarmCreations.length, count);
+    alarms.delete(AUTO_ALARM_NAME);
+    await installedListener();
+    assert.equal(alarmCreations.length, count + 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("disabling clears only the automatic alarm while manual checks still work", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async () => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6");
+    alarms.set("unrelated-alarm", { name: "unrelated-alarm", scheduledTime: 1 });
+    await installedListener();
+    assert.equal((await message("SET_AUTO_ENABLED", { enabled: false })).settings.enabled, false);
+    assert.equal(alarms.has(AUTO_ALARM_NAME), false);
+    assert.equal(alarms.has("unrelated-alarm"), true);
+    await alarmListener({ name: AUTO_ALARM_NAME });
+    assert.equal(alarms.has(AUTO_ALARM_NAME), false);
+    const manual = await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+    assert.equal(manual.status, "success");
+    assert.equal((await message("SET_AUTO_ENABLED", { enabled: true })).settings.enabled, true);
+    assert.equal(alarms.has(AUTO_ALARM_NAME), true);
+  });
+});
+
+test("addition and manual refresh delay automatic eligibility for six elapsed hours", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
+    await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+    assert.equal(requests, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    clock.advance(AUTO_INTERVAL_MS - 60 * 1000);
+    await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+    assert.equal(requests, 2);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    await alarmListener({ name: AUTO_ALARM_NAME, scheduledTime: clock.now });
+    assert.equal(requests, 2);
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(requests, 3);
+  });
+});
+
+test("failed automatic checks also defer retry by six hours", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T06:00:00.000Z" });
+    fetchHandler = async () => new Response("Denied", { status: 503, headers: { "content-type": "text/html" } });
+    await installedListener();
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastErrorCode, "HTTP_ERROR");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, new Date(clock.now).toISOString());
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("overdue products run one per alarm with durable pacing and no overlapping auto fetches", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0CQXKXBR7", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    const firstStarted = deferred();
+    const firstFinished = deferred();
+    const urls = [];
+    fetchHandler = async url => {
+      urls.push(url);
+      if (urls.length === 1) {
+        firstStarted.resolve();
+        await firstFinished.promise;
+      }
+      return htmlResponse(url.split("/").at(-1));
+    };
+    await installedListener();
+    advanceToAlarm(clock);
+    const first = fireAutomaticAlarm();
+    await firstStarted.promise;
+    assert.equal(urls.length, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(urls.length, 1);
+    firstFinished.resolve();
+    await first;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.deepEqual(urls, [productUrl("B0CQXKXBR7"), productUrl("B0D47HCRZ6")]);
+    assert.equal(stored.watchlist.products.B0CQXKXBR7.lastCheckStatus, "success");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "success");
+  });
+});
+
+test("an active manual check prevents a duplicate automatic request", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    await installedListener();
+    const parsing = deferred();
+    const started = deferred();
+    let requests = 0;
+    fetchHandler = async () => { requests++; started.resolve(); return htmlResponse("B0D47HCRZ6"); };
+    parseHandler = () => parsing.promise;
+    const manual = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+    await started.promise;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(requests, 1);
+    parsing.resolve({ status: "success", priceTry: 555, title: null });
+    await manual;
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("missing Amazon permission causes no automatic fetch and a bounded retry", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    await installedListener();
+    permission = false;
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse(); };
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(requests, 0);
+    assert.equal((await message("GET_AUTO_SETTINGS")).errorCode, "PERMISSION_REQUIRED");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, "2026-10-20T06:00:00.000Z");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    permission = true;
+    assert.equal((await message("GET_AUTO_SETTINGS")).errorCode, null);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+  });
+});
+
+test("removing an overdue product during a scan prevents its later request", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0CQXKXBR7", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    const started = deferred();
+    const finished = deferred();
+    const requests = [];
+    fetchHandler = async url => {
+      requests.push(url);
+      started.resolve();
+      await finished.promise;
+      return htmlResponse(url.split("/").at(-1));
+    };
+    await installedListener();
+    advanceToAlarm(clock);
+    const scan = fireAutomaticAlarm();
+    await started.promise;
+    await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
+    finished.resolve();
+    await scan;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.deepEqual(requests, [productUrl("B0CQXKXBR7"), productUrl("B0CQXKXBR7")]);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6, undefined);
+  });
+});
+
+test("disabling during an active automatic check stops later scheduled requests", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0CQXKXBR7", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T06:00:00.000Z" });
+    const started = deferred();
+    const finished = deferred();
+    let requests = 0;
+    fetchHandler = async () => { requests++; started.resolve(); await finished.promise; return htmlResponse(); };
+    await installedListener();
+    advanceToAlarm(clock);
+    const scan = fireAutomaticAlarm();
+    await started.promise;
+    await message("SET_AUTO_ENABLED", { enabled: false });
+    assert.equal(alarms.has(AUTO_ALARM_NAME), false);
+    finished.resolve();
+    await scan;
+    await alarmListener({ name: AUTO_ALARM_NAME });
+    assert.equal(requests, 1);
+    assert.equal(alarms.has(AUTO_ALARM_NAME), false);
+  });
+});
+
+test("restart recovers a checking product and waits for its six-hour eligibility", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    const product = seedProduct("B0D47HCRZ6", {
+      attemptedAt: "2026-10-21T11:59:00.000Z", status: "checking"
+    });
+    product.lastSuccessfulPriceTry = 123;
+    product.lastSuccessfulCheckAt = "2026-10-20T10:00:00.000Z";
+    await import("../background.js?automatic-service-worker-restart");
+    await message("GET_AUTO_SETTINGS");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastErrorCode, "CHECK_INTERRUPTED");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 123);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, Date.parse("2026-10-21T17:59:00.000Z"));
+    assert.ok(alarms.get(AUTO_ALARM_NAME).scheduledTime > clock.now);
+  });
+});
+
+test("malformed timestamps receive a persistent cooldown across a worker restart", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "invalid", addedAt: "invalid" });
+    await installedListener();
+    const firstDue = alarms.get(AUTO_ALARM_NAME).scheduledTime;
+    assert.equal(firstDue, clock.now + AUTO_INTERVAL_MS);
+    const since = stored.automaticCheckState.unknownSince.B0D47HCRZ6;
+    clock.advance(1000);
+    await import("../background.js?automatic-malformed-restart");
+    await message("GET_AUTO_SETTINGS");
+    assert.equal(stored.automaticCheckState.unknownSince.B0D47HCRZ6, since);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, firstDue);
+  });
 });

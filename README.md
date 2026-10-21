@@ -1,6 +1,6 @@
 # FiyatNöbeti
 
-Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını **elle** kontrol eden deneysel Chrome Manifest V3 uzantısı. Zamanlanmış kontroller ve bildirimler bu sürümde yoktur.
+Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını elle veya yaklaşık altı saatte bir kontrol eden deneysel Chrome Manifest V3 uzantısı. Bildirimler ve fiyat geçmişi bu sürümde yoktur.
 
 ## Yükleme
 
@@ -12,7 +12,7 @@ Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını **
 
 1. Uzantı simgesini açıp bir Amazon Türkiye ürün bağlantısı yapıştırın. `/dp/ASIN`, `/gp/product/ASIN`, başlıklı/izleme parametreli ürün URL'leri ve `amzn.eu` kısa paylaşım bağlantıları desteklenir.
 2. **Ürün ekle** düğmesine basın. Amazon Türkiye erişimi fiyat sorgusu için; `amzn.eu` erişimi yalnızca kısa bağlantıyı çözmek için istenir. İlk fiyat sorgusu başarısız olsa bile ürün listede kalır.
-3. Her ürünün **Fiyatı kontrol et** düğmesiyle tek tek yeni kontrol başlatın. Başarısız kontrol son başarılı fiyatı ve başlığı korur; fiyatı “güncel değil” olarak gösterir. **Listeden kaldır** yalnızca seçilen ürünü siler.
+3. **Otomatik kontrol** varsayılan olarak açıktır. Popup'taki anahtarla kapatıp yeniden açabilirsiniz. Her ürünün **Fiyatı kontrol et** düğmesiyle istediğiniz zaman elle kontrol başlatabilirsiniz. Başarısız kontrol son başarılı fiyatı ve başlığı korur; fiyatı “güncel değil” olarak gösterir. **Listeden kaldır** yalnızca seçilen ürünü siler.
 4. İzleme listesi popup kapanıp açılsa da `chrome.storage.local` içinde kalır. Aynı ASIN yeniden eklenirse yinelenen kayıt oluşturulmaz.
 5. Comet'te yükleme mümkünse aynı işlemleri deneyin ve uzantı hata ekranını kontrol edin.
 
@@ -26,7 +26,15 @@ Hiçbir Amazon sekmesi açılmaz. Düğme tıklanınca izin istenir, servis çal
 
 Servis çalışanı yeniden başladığında önceki oturumdan kalan `checking` kayıtları `CHECK_INTERRUPTED` hatasıyla başarısız duruma alınır; son başarılı fiyat ve zamanı korunur. Kontrol durumu popup her açıldığında değil, yalnızca servis çalışanı başlangıcında kurtarılır.
 
-Otomatik/periyodik kontroller, bildirimler ve geçmiş fiyat grafikleri henüz uygulanmadı. Fiyat güncellemesi kullanıcı eylemiyle başlar.
+### Otomatik kontrol
+
+`chrome.storage.local` içindeki `automaticChecks` ayarı `{ version: 1, enabled: true, intervalMinutes: 360 }` biçimindedir. Altı saatlik aralık bu sürümde sabittir. Ayrı `automaticCheckState` (sürüm 1), sıradaki alarm zamanını, istekler arası en erken zamanı, bozuk/eksik zaman damgaları için koruyucu başlangıç zamanlarını ve gerekirse güvenli izin hata kodunu tutar. Ürün izleme listesi şeması değişmez.
+
+Uygunluk, ürünün **son denenen** kontrolünden itibaren geçen gerçek altı saate göre belirlenir. Başarısız kontroller ve elle yenileme de bu süreyi yeniden başlatır. Hiç deneme yoksa eklenme zamanı kullanılır; iki zaman da geçersizse kalıcı koruyucu zaman kaydedilir ve en az altı saat beklenir. Böylece tekrar eden hatalar hızlı isteklere dönüşmez.
+
+Chrome alarmı her seferinde en çok bir uygun ürünü kontrol eder; başka uygun ürün varsa sonraki denemeyi en az bir dakika sonrasına kurar. Bu tek seferlik alarm ve ara süresi yerel depoda tutulur. Çalışan yeniden başlarsa eksik alarm yeniden kurulur ve yarım kalan kontrol `CHECK_INTERRUPTED` olarak işaretlenir; son deneme zamanı korunur. Kaçırılan altı saatlik dönemler toplu halde tekrar oynatılmaz. Chrome kapalıyken kontrol yapılmaz; uyku, tarayıcı ve alarm gecikmeleri hedef zamanı ileri kaydırabilir.
+
+Otomatik kontrol kapatıldığında yalnızca uzantının kendi alarmı temizlenir; başlamış bir istek tamamlanabilir, yeni otomatik istek başlatılmaz. Elle kontroller açık kalır. Amazon Türkiye site izni yoksa otomatik akış izin penceresi açmaz veya ağ isteği yapmaz; popup izin gereksinimini gösterir ve yeniden denemeyi sınırlar. Sık veya çok sayıda fiyat isteği Amazon tarafından kısıtlanabilir. Bildirimler, hedef fiyatlar ve geçmiş fiyat grafikleri henüz uygulanmadı.
 
 ## Desteklenen bağlantılar
 
@@ -48,7 +56,7 @@ Kısa bağlantı çözümleme denemesi artık `redirect: "follow"` kullanır; Ch
 
 Yalnızca `#corePrice_feature_div .a-offscreen` içindeki satış fiyatı adayı kabul edilir. Adayın üst DOM öğelerinden birinde `apex-priceperuni` ile başlayan ayrı bir sınıf token'ı varsa bu bilinen birim fiyatı bileşeni dışarıda bırakılır; birim fiyatı asla ürün satış fiyatı olarak kullanılmaz. Birden fazla satış fiyatı adayı kalırsa sonuç yine belirsiz sayılır. Reklam, öneri, eski fiyat veya taksit tutarına geçilmez. Fiyat bulunamazsa veya Amazon robot doğrulaması, erişim engeli, oturum açma, HTTP hatası, yönlendirme ya da ağ hatası dönerse sorgu başarısız kaydedilir. Başarısız sonuç eski başarılı fiyatı değiştirmez. Giriş yapılmış tarayıcı oturumunun çerezleri gönderilmez; dolayısıyla kullanıcıya özel fiyatlar görülemeyebilir. CAPTCHA aşma veya görünür sekme çözümü yoktur.
 
-Manifest `storage`, `offscreen` ve iki isteğe bağlı site erişimi içerir: `https://www.amazon.com.tr/*` ve `https://amzn.eu/*`. Normal ürün URL'si `amzn.eu` erişimi istemez; bu izin yalnızca kısa bağlantı girildiğinde istenir. Tarama geçmişi, çerez API'si, diğer siteler, uzak kod, sunucu hesabı veya telemetri kullanılmaz. HTML saklanmaz; yalnızca watchlist kayıtları ve önceki prototiple uyum için son tekil sorgu tanısı tutulur.
+Manifest `storage`, `offscreen`, zamanlanmış işleri servis çalışanı sürekli açık kalmadan çalıştırmak için `alarms` ve iki isteğe bağlı site erişimi içerir: `https://www.amazon.com.tr/*` ve `https://amzn.eu/*`. Normal ürün URL'si `amzn.eu` erişimi istemez; bu izin yalnızca kısa bağlantı girildiğinde istenir. Tarama geçmişi, çerez API'si, diğer siteler, uzak kod, sunucu hesabı veya telemetri kullanılmaz. HTML saklanmaz; yalnızca watchlist kayıtları ve önceki prototiple uyum için son tekil sorgu tanısı tutulur.
 
 ## Uzun ve kısa bağlantıları elle deneme
 
@@ -72,4 +80,6 @@ Otomatik testler yalnızca sahte Fetch yanıtları kullanır. Gerçek Chrome vey
 
 ## Testler
 
-Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu gerekmez. Testler sentetik HTML örnekleri ve taklit Chrome storage/permission/fetch API'leri kullanır; gerçek Amazon ağına bağlanmaz. Chrome'da `chrome://extensions` sayfasından **Paketlenmemiş öğe yükle** ile depo klasörünü seçin. Ardından popup'ta en az iki ürün ekleyin, popup'ı kapatıp açın, bir ürünü yenileyin ve diğerini kaldırın. Ayrıca bir kontrolü Amazon erişimi reddedilerek veya geçersiz ürünle başarısız ettirip son başarılı fiyatın korunup “güncel değil” etiketini aldığını denetleyin. Comet'te aynı akış, yalnızca paketlenmemiş uzantı yükleme ile gerekli MV3 API'leri destekleniyorsa denenebilir. Otomatik kontroller ve bildirimler bu PR'da yoktur.
+Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu gerekmez. Testler sentetik HTML, kontrollü saat ve taklit Chrome storage/alarms/permission/fetch API'leri kullanır; gerçek Amazon ağına bağlanmaz.
+
+Chrome'da elle test için `chrome://extensions` sayfasından uzantıyı yeniden yükleyin. Popup'ta otomatik kontrolün **Açık · 6 saatte bir** olduğunu doğrulayın; iki Amazon ürünü ekleyin ve ilk fiyat kontrollerini inceleyin. Popup'ı kapatıp açınca ayar ve ürünler kalmalıdır. Bir ürünü elle yenileyin; onun sonraki otomatik kontrolü son denemeden altı saat önce gerçekleşmemelidir. Otomatik kontrolü kapatın, elle yenilemeyi tekrar deneyin ve yeni otomatik kontrol olmadığını doğrulayın. Yeniden açıp Chrome çalışır durumdayken yeterli süre bekleyin; başarılı/başarısız otomatik denemenin zamanını ve eski başarılı fiyatın korunmasını inceleyin. Uzantının servis çalışanı DevTools penceresinde `chrome.alarms.get("fiyatnobeti:automatic-price-check")` ile alarmın varlığını, kapatınca silindiğini ve açınca geri geldiğini kontrol edebilirsiniz. Görünür Amazon sekmesi açılmamalıdır. Comet'te aynı akış, paketlenmemiş uzantı ve gerekli MV3 API'leri destekleniyorsa denenebilir. Otomatik kontrollerin gerçek Chrome/Comet davranışı henüz ayrıca doğrulanmamıştır.

@@ -12,6 +12,13 @@
         <h1>FiyatNöbeti</h1>
         <p class="intro">Amazon Türkiye fiyat takipçisi</p>
       </header>
+      <div class="auto-control">
+        <label for="auto-enabled">Otomatik kontrol <span>6 saatte bir</span></label>
+        <input id="auto-enabled" type="checkbox" aria-describedby="auto-note auto-status">
+        <span id="auto-mode">Yükleniyor…</span>
+      </div>
+      <p id="auto-note" class="auto-note">Chrome çalışırken kontrol edilir; tarayıcı geciktirebilir. Chrome kapalıyken kontrol yapılmaz.</p>
+      <p id="auto-status" class="auto-status" role="status" aria-live="polite"></p>
       <form id="add-form">
         <label for="product-url">Amazon ürün bağlantısı</label>
         <input id="product-url" type="url" required spellcheck="false"

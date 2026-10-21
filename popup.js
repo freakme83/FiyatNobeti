@@ -10,9 +10,40 @@ const status = document.querySelector("#status");
 const shortLinkNotice = document.querySelector("#short-link-notice");
 const productList = document.querySelector("#products");
 const emptyState = document.querySelector("#empty-state");
+const autoEnabled = document.querySelector("#auto-enabled");
+const autoMode = document.querySelector("#auto-mode");
+const autoStatus = document.querySelector("#auto-status");
 
 let watchlist = { version: 1, products: {} };
 const busyAsins = new Set();
+
+async function loadAutoSettings() {
+  const result = await chrome.runtime.sendMessage({ type: "GET_AUTO_SETTINGS" });
+  if (result?.status !== "success") throw new Error("AUTO_SETTINGS_ERROR");
+  autoEnabled.checked = result.settings.enabled;
+  autoEnabled.disabled = false;
+  autoMode.textContent = result.settings.enabled ? "Açık" : "Kapalı";
+  autoStatus.textContent = result.settings.enabled && result.errorCode === "PERMISSION_REQUIRED"
+    ? "Otomatik kontrol için Amazon Türkiye izni gerekli; ürün eklerken izin verebilirsiniz."
+    : "";
+}
+
+autoEnabled.disabled = true;
+autoEnabled.addEventListener("change", async () => {
+  const enabled = autoEnabled.checked;
+  autoEnabled.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "SET_AUTO_ENABLED", enabled });
+    if (result?.status !== "success") throw new Error("AUTO_SETTINGS_ERROR");
+    autoMode.textContent = enabled ? "Açık" : "Kapalı";
+    autoStatus.textContent = enabled ? "Otomatik kontrol açık." : "Otomatik kontrol kapalı.";
+  } catch {
+    autoEnabled.checked = !enabled;
+    autoStatus.textContent = "Otomatik kontrol ayarı kaydedilemedi.";
+  } finally {
+    autoEnabled.disabled = false;
+  }
+});
 
 function render() {
   renderProductRows(document, productList, watchlist.products, emptyState);
@@ -120,3 +151,4 @@ productList.addEventListener("click", async event => {
 
 input.addEventListener("input", updateShortLinkNotice);
 loadWatchlist().catch(() => { status.textContent = errorMessage("STORAGE_ERROR"); });
+loadAutoSettings().catch(() => { autoStatus.textContent = "Otomatik kontrol ayarı okunamadı."; });
