@@ -66,7 +66,11 @@ globalThis.fetch = async (url, options) => {
   if (fetchHandler) return fetchHandler(url, options);
   return fetchResult;
 };
-const { runOneAutomaticCheckForDev } = await import("../background.js");
+const {
+  prepareAutomaticAlarmTestForDev,
+  runAutomaticAlarmTestForDev,
+  runOneAutomaticCheckForDev
+} = await import("../background.js");
 assert.equal(globalThis.fiyatNobetiDev, undefined);
 const productionListeners = { listener, alarmListener, installedListener };
 
@@ -904,5 +908,166 @@ test("developer result cannot overwrite a removed and re-added product", async (
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 888);
     assert.equal(stored.watchlist.products.B0D47HCRZ6.title, "Yeni ürün");
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("scheduled developer runner bypasses eligibility and uses the automatic fetch path once", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
+    parseHandler = async () => ({ status: "success", priceTry: 777, title: "Alarm ürünü" });
+
+    const target = await prepareAutomaticAlarmTestForDev();
+    assert.equal(target.status, "ready");
+    assert.equal(requests, 0);
+    const result = await runAutomaticAlarmTestForDev(target);
+
+    assert.equal(result.status, "success");
+    assert.equal(result.requestStarted, true);
+    assert.equal(requests, 1);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 777);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, new Date(clock.now).toISOString());
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("scheduled developer check preserves another product's eligibility with normal pacing", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0CQXKXBR7", { attemptedAt: "2026-10-20T11:00:00.000Z" });
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T11:00:00.000Z" });
+    const target = await prepareAutomaticAlarmTestForDev();
+    assert.equal(target.asin, "B0CQXKXBR7");
+    fetchHandler = async () => htmlResponse("B0CQXKXBR7");
+
+    assert.equal((await runAutomaticAlarmTestForDev(target)).status, "success");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, "2026-10-20T11:00:00.000Z");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+  });
+});
+
+test("scheduled developer runner rejects unavailable permission and disabled automatic checks", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async () => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const target = await prepareAutomaticAlarmTestForDev();
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse(); };
+
+    permission = false;
+    const denied = await runAutomaticAlarmTestForDev(target);
+    assert.equal(denied.status, "failure");
+    assert.equal(denied.errorCode, "PERMISSION_REQUIRED");
+    assert.equal(denied.requestStarted, false);
+    assert.equal(requests, 0);
+
+    permission = true;
+    stored.automaticChecks.enabled = false;
+    const disabled = await runAutomaticAlarmTestForDev(target);
+    assert.equal(disabled.status, "skipped");
+    assert.equal(disabled.errorCode, "AUTOMATIC_DISABLED");
+    assert.equal(disabled.requestStarted, false);
+    assert.equal(requests, 0);
+  });
+});
+
+test("scheduled developer target is invalidated by removal and same-ASIN re-addition", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const removedTarget = await prepareAutomaticAlarmTestForDev();
+    await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse(); };
+    const removed = await runAutomaticAlarmTestForDev(removedTarget);
+    assert.equal(removed.status, "skipped");
+    assert.equal(removed.errorCode, "PRODUCT_NOT_FOUND");
+
+    const replacement = createProductRecord({
+      asin: "B0D47HCRZ6",
+      canonicalUrl: productUrl("B0D47HCRZ6"),
+      addedAt: new Date(clock.now + 1).toISOString()
+    });
+    stored.watchlist.products.B0D47HCRZ6 = replacement;
+    const readded = await runAutomaticAlarmTestForDev(removedTarget);
+    assert.equal(readded.status, "skipped");
+    assert.equal(readded.errorCode, "PRODUCT_INSTANCE_CHANGED");
+    assert.equal(requests, 0);
+  });
+});
+
+test("scheduled developer runner cannot duplicate an active manual request", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async () => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const target = await prepareAutomaticAlarmTestForDev();
+    const parsing = deferred();
+    const started = deferred();
+    let requests = 0;
+    fetchHandler = async () => { requests++; started.resolve(); return htmlResponse("B0D47HCRZ6"); };
+    parseHandler = () => parsing.promise;
+    const manual = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+    await started.promise;
+
+    const result = await runAutomaticAlarmTestForDev(target);
+    assert.equal(result.status, "skipped");
+    assert.equal(result.errorCode, "CHECK_BUSY");
+    assert.equal(result.requestStarted, false);
+    assert.equal(requests, 1);
+    parsing.resolve({ status: "success", priceTry: 700, title: null });
+    await manual;
+  });
+});
+
+test("scheduled developer runner cannot overlap an active production automatic check", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T11:00:00.000Z" });
+    const target = await prepareAutomaticAlarmTestForDev();
+    const parsing = deferred();
+    const started = deferred();
+    let requests = 0;
+    fetchHandler = async () => { requests++; started.resolve(); return htmlResponse("B0D47HCRZ6"); };
+    parseHandler = () => parsing.promise;
+    await installedListener();
+    advanceToAlarm(clock);
+    const productionCheck = fireAutomaticAlarm();
+    await started.promise;
+
+    const result = await runAutomaticAlarmTestForDev(target);
+    assert.equal(result.status, "skipped");
+    assert.equal(result.errorCode, "AUTOMATIC_CHECK_RUNNING");
+    assert.equal(result.requestStarted, false);
+    assert.equal(requests, 1);
+
+    parsing.resolve({ status: "success", priceTry: 701, title: null });
+    await productionCheck;
+  });
+});
+
+test("failed scheduled developer fetch preserves the last successful price", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async () => {
+    await resetWatchlist();
+    const product = seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z", status: "success" });
+    product.lastSuccessfulPriceTry = 599.99;
+    product.lastSuccessfulCheckAt = "2026-10-21T10:00:00.000Z";
+    const target = await prepareAutomaticAlarmTestForDev();
+    fetchHandler = async () => new Response("Denied", { status: 503, headers: { "content-type": "text/html" } });
+
+    const result = await runAutomaticAlarmTestForDev(target);
+    assert.equal(result.status, "failure");
+    assert.equal(result.errorCode, "HTTP_ERROR");
+    assert.equal(result.requestStarted, true);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 599.99);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulCheckAt, "2026-10-21T10:00:00.000Z");
   });
 });

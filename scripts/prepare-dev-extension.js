@@ -14,11 +14,24 @@ const RUNTIME_FILES = [
   "popup.js",
   "src"
 ];
-const DEV_BACKGROUND_SOURCE = `import { runOneAutomaticCheckForDev } from "./background.js";
+const DEV_BACKGROUND_SOURCE = `import {
+  prepareAutomaticAlarmTestForDev,
+  runAutomaticAlarmTestForDev,
+  runOneAutomaticCheckForDev
+} from "./background.js";
+import { installDeveloperAutomaticAlarmTest } from "./dev-automatic-alarm.js";
+
+const alarmTest = installDeveloperAutomaticAlarmTest({
+  chromeApi: chrome,
+  prepareTarget: prepareAutomaticAlarmTestForDev,
+  runTarget: runAutomaticAlarmTestForDev
+});
 
 Object.defineProperty(globalThis, "fiyatNobetiDev", {
   value: Object.freeze({
-    runOneAutomaticCheck: runOneAutomaticCheckForDev
+    runOneAutomaticCheck: runOneAutomaticCheckForDev,
+    scheduleOneAutomaticCheckTest: alarmTest.scheduleOneAutomaticCheckTest,
+    getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest
   }),
   enumerable: true,
   configurable: false,
@@ -38,6 +51,7 @@ export async function prepareDevExtension(root = defaultRoot) {
   for (const path of RUNTIME_FILES) {
     await cp(join(sourceRoot, path), join(target, path), { recursive: true });
   }
+  await cp(join(sourceRoot, "scripts/dev-automatic-alarm.js"), join(target, "dev-automatic-alarm.js"));
   await writeFile(join(target, "background.dev.js"), DEV_BACKGROUND_SOURCE);
 
   const manifestPath = join(target, "manifest.json");

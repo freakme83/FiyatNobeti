@@ -84,16 +84,45 @@ Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu
 
 ### Geliştirici otomatik kontrol testi
 
-Altı saat beklemeden gerçek otomatik kontrol yolunu bir kez denemek için depo kökünde `npm run dev:prepare` çalıştırın. Komut, Git tarafından yok sayılan `.fiyatnobeti-dev` klasörüne ayrı bir geliştirici yüklemesi hazırlar; normal `manifest.json` değişmez ve standart yüklemede geliştirici komutu bulunmaz.
+Altı saat beklemeden gerçek otomatik kontrol yolunu ve Chrome alarm teslimini bir kez denemek için depo kökünde `npm run dev:prepare` çalıştırın. Komut, Git tarafından yok sayılan `.fiyatnobeti-dev` klasörüne ayrı bir geliştirici yüklemesi hazırlar; normal `manifest.json` değişmez ve standart yüklemede geliştirici komutları ile test alarmı bulunmaz.
 
-Chrome'da `chrome://extensions` sayfasında Geliştirici modu'nu açıp `.fiyatnobeti-dev` klasörünü paketlenmemiş uzantı olarak yükleyin. Comet paketlenmemiş Chromium uzantılarını destekliyorsa uzantı yönetimi ekranında aynı klasörü yükleyin. **FiyatNöbeti (Geliştirici)** popup'ından en az bir ürün ekleyerek Amazon Türkiye iznini kullanıcı eylemiyle verin. Ardından uzantı kartındaki servis çalışanı **İncele** bağlantısını açın ve DevTools Console'da şunu çalıştırın:
+Chrome'da `chrome://extensions` sayfasında Geliştirici modu'nu açıp `.fiyatnobeti-dev` klasörünü paketlenmemiş uzantı olarak yükleyin. macOS dosya seçicisinde gizli klasörü göstermek gerekirse `Command + Shift + .` kullanın. Comet paketlenmemiş Chromium uzantılarını destekliyorsa uzantı yönetimi ekranında aynı klasörü yükleyin. **FiyatNöbeti (Geliştirici)** popup'ından en az bir ürün ekleyerek Amazon Türkiye iznini kullanıcı eylemiyle verin. Otomatik kontrolün açık kaldığını doğrulayın.
+
+Uzantı kartındaki servis çalışanı **İncele** bağlantısını açın ve yaklaşık iki dakika sonrası için tek seferlik gerçek Chrome alarmını kurun:
+
+```javascript
+await globalThis.fiyatNobetiDev.scheduleOneAutomaticCheckTest(2)
+```
+
+Gecikme tam sayı olarak 1–5 dakika aralığındadır. Sonuç `testId`, hedef `asin`, UTC tabanlı `scheduledAt`, benzersiz `alarmName` ve `scheduled` durumunu içerir. Bu komut Amazon isteğini hemen başlatmaz. DevTools'u kapatın; Chrome veya Comet'i açık, Mac'i test süresince uyanık bırakın. Tarayıcı alarmı doğal biçimde teslim ettiğinde servis çalışanı en fazla bir gerçek otomatik ürün kontrolü başlatır.
+
+Yaklaşık iki dakika sonra servis çalışanı DevTools'unu yeniden açıp sonucu okuyun:
+
+```javascript
+await globalThis.fiyatNobetiDev.getLastAutomaticAlarmTest()
+```
+
+`deliveredAt` alarmın gerçekten teslim edildiği, `completedAt` kontrolün tamamlandığı zamanı gösterir. `requestStarted`, Amazon isteğinin başlayıp başlamadığını belirtir. Durumların anlamı:
+
+- `scheduled`: Alarm kuruldu; henüz teslim edilmedi.
+- `running`: Alarm teslim edildi; kontrol devam ediyor.
+- `success`: Alarm teslim edildi ve fiyat kontrolü başarıyla tamamlandı.
+- `failure`: Alarm teslim edildi fakat izin, ağ, HTTP veya fiyat ayrıştırma hatasıyla tamamlandı.
+- `skipped`: Ürün kaldırıldığı/değiştiği, otomatik kontrol kapalı olduğu veya başka bir kontrol çalıştığı için istek başlatılmadı.
+- `interrupted`: Alarm teslim edildikten sonra servis çalışanı kontrol tamamlanmadan sonlandı; test yeniden oynatılmaz.
+
+Başarılı sonuçtan sonra popup'ı yeniden açıp ürün fiyatını ve son kontrol zamanını inceleyin. DevTools'ta `await chrome.alarms.get("fiyatnobeti:automatic-price-check")` ile normal üretim alarmının kaldığını doğrulayın. Kontrol edilen ürünün altı saatlik uygunluğu yeni son deneme zamanından hesaplanır; başka uygun ürün varsa mevcut en az bir dakikalık istek aralığı korunur. Test alarmı yinelenmez.
+
+İsteğe bağlı doğrudan kontrol komutu da kullanılabilir:
 
 ```javascript
 await globalThis.fiyatNobetiDev.runOneAutomaticCheck()
 ```
 
-Komut en fazla bir kayıtlı ürünü mevcut otomatik fiyat kontrolü, güvenli Amazon fetch'i ve ayrıştırma yoluyla denetler. Yalnızca bu çağrı için altı saatlik uygunluk beklemesini atlar; aynı ürünün devam eden kontrolüyle çakışmaz ve izin isteme penceresi açmaz. Sonuç `{ asin, outcome, errorCode?, checkedAt }` biçimindedir. Denemeden sonra normal alarm tekrar yaklaşık altı saat sonrasına kurulur; iki dakikalık veya yinelenen bir test modu oluşturulmaz.
+Bu eski komut kontrolü hemen başlatır ve alarm teslimini sınamaz. Her iki geliştirici yolu da mevcut güvenli Amazon fetch'i ile ayrıştırmasını kullanır, izin penceresi açmaz ve devam eden ürün kontrolüyle çakışmaz.
 
-Standart sürüme dönmek için geliştirici yüklemesini uzantı ekranından kaldırın ve depo kök klasörünü yeniden paketlenmemiş uzantı olarak yükleyin. `.fiyatnobeti-dev` klasörü istenirse silinebilir. Bu konsol testi gerçek Chrome veya Comet'te ayrıca doğrulanmalıdır; otomatik testler yalnızca taklit edilmiş API, saat ve ağ yanıtlarını kullanır.
+Tek kayıtlık tanı `chrome.storage.local` içindeki `fiyatnobetiDeveloperAutomaticAlarmTest` anahtarında tutulur; HTML, yanıt gövdesi veya çerez saklanmaz. Test alarmının adı `fiyatnobeti:dev:automatic-check-test:<testId>` biçimindedir ve üretim alarmından ayrıdır. Bekleyen test servis çalışanı yeniden başlasa da korunur; `running` durumda kesilen test `interrupted` olur ve tekrar istek başlatmaz.
+
+Standart sürüme dönmek için geliştirici yüklemesini uzantı ekranından kaldırın ve depo kök klasörünü yeniden paketlenmemiş uzantı olarak yükleyin. `.fiyatnobeti-dev` klasörü istenirse silinebilir. Doğal test alarmının gerçek Chrome veya Comet teslimi ayrıca elle doğrulanmalıdır; otomatik testler alarm olayını, API'leri, saati ve ağı taklit eder.
 
 Chrome'da elle test için `chrome://extensions` sayfasından uzantıyı yeniden yükleyin. Popup'ta otomatik kontrolün **Açık · 6 saatte bir** olduğunu doğrulayın; iki Amazon ürünü ekleyin ve ilk fiyat kontrollerini inceleyin. Popup'ı kapatıp açınca ayar ve ürünler kalmalıdır. Bir ürünü elle yenileyin; onun sonraki otomatik kontrolü son denemeden altı saat önce gerçekleşmemelidir. Otomatik kontrolü kapatın, elle yenilemeyi tekrar deneyin ve yeni otomatik kontrol olmadığını doğrulayın. Yeniden açıp Chrome çalışır durumdayken yeterli süre bekleyin; başarılı/başarısız otomatik denemenin zamanını ve eski başarılı fiyatın korunmasını inceleyin. Uzantının servis çalışanı DevTools penceresinde `chrome.alarms.get("fiyatnobeti:automatic-price-check")` ile alarmın varlığını, kapatınca silindiğini ve açınca geri geldiğini kontrol edebilirsiniz. Görünür Amazon sekmesi açılmamalıdır. Comet'te aynı akış, paketlenmemiş uzantı ve gerekli MV3 API'leri destekleniyorsa denenebilir. Otomatik kontrollerin gerçek Chrome/Comet davranışı henüz ayrıca doğrulanmamıştır.

@@ -11,6 +11,7 @@ test("production manifest excludes the developer console entry point", async () 
   const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
   assert.equal(manifest.background.service_worker, "background.js");
   assert.notEqual(manifest.background.service_worker, "background.dev.js");
+  assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
 });
 
 test("developer preparation creates an isolated manifest that enables the console entry point", async () => {
@@ -20,7 +21,10 @@ test("developer preparation creates an isolated manifest that enables the consol
     const manifest = JSON.parse(await readFile(resolve(target, "manifest.json"), "utf8"));
     assert.equal(manifest.name, "FiyatNöbeti (Geliştirici)");
     assert.equal(manifest.background.service_worker, "background.dev.js");
-    assert.match(await readFile(resolve(target, "background.dev.js"), "utf8"), /fiyatNobetiDev/);
+    const developerBackground = await readFile(resolve(target, "background.dev.js"), "utf8");
+    assert.match(developerBackground, /scheduleOneAutomaticCheckTest/);
+    assert.match(developerBackground, /getLastAutomaticAlarmTest/);
+    assert.match(await readFile(resolve(target, "dev-automatic-alarm.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
 
     const productionManifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
     assert.equal(productionManifest.background.service_worker, "background.js");
