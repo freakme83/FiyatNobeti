@@ -3,6 +3,13 @@ body { width: 360px; max-height: 600px; margin: 0; color: #17202a; background: #
 main { padding: 16px; }
 h1 { margin: 0; font-size: 20px; }
 .intro { margin: 2px 0 14px; color: #53606c; }
+.auto-control { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+.auto-control label { display: inline; margin: 0; }
+.auto-control label span, #auto-mode { color: #53606c; font-size: 11px; font-weight: 400; }
+.auto-control input { width: 16px; height: 16px; margin: 0; padding: 0; flex: none; cursor: pointer; }
+.auto-control input:disabled { cursor: wait; }
+.auto-note, .auto-status { margin: 2px 0 8px; color: #53606c; font-size: 11px; line-height: 1.4; }
+.auto-status:empty { display: none; }
 label { display: block; font-weight: 650; margin-bottom: 5px; }
 input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #a5b1bb; border-radius: 6px; font: inherit; }
 input:focus-visible, button:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "dev:prepare": "node scripts/prepare-dev-extension.js",
     "test": "node --test"
   }
 }

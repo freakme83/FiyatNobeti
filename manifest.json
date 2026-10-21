@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "FiyatNöbeti",
   "version": "0.1.0",
-  "description": "Amazon Türkiye için elle başlatılan deneysel fiyat sorgusu.",
-  "permissions": ["storage", "offscreen"],
+  "description": "Amazon Türkiye ürünleri için yerel fiyat izleme listesi.",
+  "permissions": ["storage", "offscreen", "alarms"],
   "optional_host_permissions": [
     "https://www.amazon.com.tr/*",
     "https://amzn.eu/*"
