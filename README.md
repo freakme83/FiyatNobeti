@@ -24,6 +24,8 @@ Hiçbir Amazon sekmesi açılmaz. Düğme tıklanınca izin istenir, servis çal
 
 Ürün başlığı aynı fiyat kontrolü için alınmış HTML'deki yalnızca `#productTitle` öğesinden okunur, boşlukları düzenlenir ve en fazla 200 karakter kabul edilir. Bulunamazsa `Amazon ürünü` gösterilir ve ASIN ikincil bilgi olarak sunulur. Popup başlığı HTML olarak değil, güvenli metin düğümü olarak işler.
 
+Servis çalışanı yeniden başladığında önceki oturumdan kalan `checking` kayıtları `CHECK_INTERRUPTED` hatasıyla başarısız duruma alınır; son başarılı fiyat ve zamanı korunur. Kontrol durumu popup her açıldığında değil, yalnızca servis çalışanı başlangıcında kurtarılır.
+
 Otomatik/periyodik kontroller, bildirimler ve geçmiş fiyat grafikleri henüz uygulanmadı. Fiyat güncellemesi kullanıcı eylemiyle başlar.
 
 ## Desteklenen bağlantılar

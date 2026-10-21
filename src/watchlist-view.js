@@ -12,6 +12,8 @@ const ERROR_LABELS = {
   SHORT_LINK_FINAL_URL_MISSING: "Kısa bağlantının ürün adresi alınamadı.",
   SHORT_LINK_FINAL_URL_INVALID: "Kısa bağlantının ürün adresi doğrulanamadı.",
   SHORT_LINK_UNSUPPORTED_PRODUCT_URL: "Kısa bağlantı desteklenen bir ürün sayfasına ulaşmadı.",
+  CHECK_INTERRUPTED: "Kontrol servis çalışanı yeniden başladığı için kesildi; yeniden deneyebilirsiniz.",
+  CHECK_CANCELLED: "Kontrol sonucu ürün kaydı değiştiği için uygulanmadı.",
   REDIRECT: "Amazon yönlendirmesi nedeniyle fiyat doğrulanamadı.",
   ACCESS_DENIED: "Amazon erişimi reddetti.",
   BOT_VERIFICATION: "Amazon robot doğrulaması istedi.",

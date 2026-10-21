@@ -23,7 +23,8 @@ const SHORT_LINK_RESPONSE_TYPES = new Set(["basic", "cors", "default", "error", 
 let creatingOffscreen;
 let watchlistMutationQueue = Promise.resolve();
 const inFlightChecks = new Map();
-const checkGenerations = new Map();
+const productInstances = new Map();
+let nextProductInstance = 0;
 
 function shortLinkDiagnostics(error) {
   const diagnostics = {};
@@ -191,32 +192,54 @@ async function getWatchlist() {
   });
 }
 
+function productInstance(asin) {
+  let identity = productInstances.get(asin);
+  if (identity === undefined) {
+    identity = ++nextProductInstance;
+    productInstances.set(asin, identity);
+  }
+  return identity;
+}
+
 async function checkWatchlistProduct(asin) {
   if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) return { status: "failure", errorCode: "INVALID_PRODUCT" };
   asin = asin.toUpperCase();
-  if (inFlightChecks.has(asin)) return { status: "busy", asin };
-  const generation = (checkGenerations.get(asin) || 0) + 1;
-  checkGenerations.set(asin, generation);
-
-  const operation = (async () => {
+  let flightKey;
+  let ownsFlight = false;
+  try {
     const start = await withWatchlistLock(async () => {
       const watchlist = await readWatchlist();
       const product = watchlist.products[asin];
-      if (!product) return null;
+      if (!product) return { missing: true };
+      const identity = productInstance(asin);
+      flightKey = `${asin}:${identity}`;
+      if (inFlightChecks.has(flightKey)) return { busy: true };
+
       product.lastAttemptedCheckAt = new Date().toISOString();
       product.lastCheckStatus = "checking";
       product.lastErrorCode = null;
-      await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
-      return product.canonicalUrl;
+      inFlightChecks.set(flightKey, true);
+      ownsFlight = true;
+      try {
+        await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+      } catch (error) {
+        inFlightChecks.delete(flightKey);
+        ownsFlight = false;
+        throw error;
+      }
+      return { canonicalUrl: product.canonicalUrl, identity };
     });
-    if (!start) return { status: "failure", asin, errorCode: "PRODUCT_NOT_FOUND" };
+    if (start.missing) return { status: "failure", asin, errorCode: "PRODUCT_NOT_FOUND" };
+    if (start.busy) return { status: "busy", asin };
 
-    const fetched = await fetchProduct(start);
+    const fetched = await fetchProduct(start.canonicalUrl);
     const checkedAt = new Date().toISOString();
     return withWatchlistLock(async () => {
       const watchlist = await readWatchlist();
       const product = watchlist.products[asin];
-      if (!product || checkGenerations.get(asin) !== generation) return { ...fetched, asin, stale: true };
+      if (!product || productInstances.get(asin) !== start.identity) {
+        return { status: "failure", asin, errorCode: "CHECK_CANCELLED", stale: true };
+      }
       product.lastAttemptedCheckAt = checkedAt;
       if (fetched.status === "success") {
         product.lastSuccessfulPriceTry = fetched.priceTry;
@@ -231,12 +254,9 @@ async function checkWatchlistProduct(asin) {
       await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
       return { ...fetched, asin, checkedAt, product: { ...product } };
     });
-  })();
-
-  inFlightChecks.set(asin, operation);
-  try { return await operation; }
+  }
   catch { return { status: "failure", asin, errorCode: "STORAGE_ERROR" }; }
-  finally { if (inFlightChecks.get(asin) === operation) inFlightChecks.delete(asin); }
+  finally { if (ownsFlight) inFlightChecks.delete(flightKey); }
 }
 
 async function addProduct(input) {
@@ -249,6 +269,7 @@ async function addProduct(input) {
     const product = createProductRecord({ asin, canonicalUrl });
     watchlist.products[asin] = product;
     await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+    productInstance(asin);
     return { duplicate: false, product: { ...product } };
   });
   if (added.duplicate) return { status: "duplicate", asin, product: added.product };
@@ -260,25 +281,45 @@ async function addProduct(input) {
 async function removeProduct(asin) {
   if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/i.test(asin)) return { status: "failure", errorCode: "INVALID_PRODUCT" };
   asin = asin.toUpperCase();
-  checkGenerations.set(asin, (checkGenerations.get(asin) || 0) + 1);
   return withWatchlistLock(async () => {
     const watchlist = await readWatchlist();
     if (!watchlist.products[asin]) return { status: "failure", errorCode: "PRODUCT_NOT_FOUND" };
     delete watchlist.products[asin];
     await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+    productInstances.delete(asin);
     return { status: "success", asin, watchlist };
   });
 }
 
+async function recoverInterruptedChecks() {
+  return withWatchlistLock(async () => {
+    const watchlist = await readWatchlist();
+    let changed = false;
+    for (const product of Object.values(watchlist.products)) {
+      if (product.lastCheckStatus !== "checking") continue;
+      product.lastCheckStatus = "failure";
+      product.lastErrorCode = "CHECK_INTERRUPTED";
+      changed = true;
+    }
+    if (changed) await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+  });
+}
+
+let recoveryFailed = false;
+const startupRecovery = recoverInterruptedChecks().catch(() => { recoveryFailed = true; });
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
-  let operation;
-  if (message?.type === "CHECK_PRICE") operation = probe(message.url);
-  else if (message?.type === "GET_WATCHLIST") operation = getWatchlist();
-  else if (message?.type === "ADD_PRODUCT") operation = addProduct(message.url);
-  else if (message?.type === "CHECK_PRODUCT") operation = checkWatchlistProduct(message.asin);
-  else if (message?.type === "REMOVE_PRODUCT") operation = removeProduct(message.asin);
+  let runOperation;
+  if (message?.type === "CHECK_PRICE") runOperation = () => probe(message.url);
+  else if (message?.type === "GET_WATCHLIST") runOperation = () => getWatchlist();
+  else if (message?.type === "ADD_PRODUCT") runOperation = () => addProduct(message.url);
+  else if (message?.type === "CHECK_PRODUCT") runOperation = () => checkWatchlistProduct(message.asin);
+  else if (message?.type === "REMOVE_PRODUCT") runOperation = () => removeProduct(message.asin);
   else return;
-  operation.then(sendResponse).catch(() => sendResponse({ status: "failure", errorCode: "STORAGE_ERROR" }));
+  startupRecovery
+    .then(() => recoveryFailed ? { status: "failure", errorCode: "STORAGE_ERROR" } : runOperation())
+    .then(sendResponse)
+    .catch(() => sendResponse({ status: "failure", errorCode: "STORAGE_ERROR" }));
   return true;
 });

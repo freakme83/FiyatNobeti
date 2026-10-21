@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createProductRow } from "../src/watchlist-view.js";
+import { createProductRow, errorMessage } from "../src/watchlist-view.js";
 import { normalizeProductTitle } from "../src/watchlist.js";
 
 const previous = {
@@ -66,6 +66,11 @@ function message(type, fields = {}) {
 }
 
 const productUrl = asin => `https://www.amazon.com.tr/dp/${asin}`;
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(complete => { resolve = complete; });
+  return { promise, resolve };
+};
 const htmlResponse = (asin = "B0FZ9Y4GPF") => new Response(`<div id="corePrice_feature_div">${asin}</div>`, {
   status: 200,
   headers: { "content-type": "text/html; charset=UTF-8" }
@@ -352,29 +357,93 @@ test("prevents duplicate simultaneous checks for the same ASIN", async () => {
   await fetchStarted;
   const second = await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
   assert.equal(second.status, "busy");
+  assert.equal((await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" })).status, "busy");
   assert.equal(requests, 1);
   completeParse({ status: "success", priceTry: 1500, title: null });
   await first;
 });
 
-test("a removed in-flight product is not recreated by its stale response", async () => {
+test("remove and re-add creates an independent check instance while discarding the old result", async () => {
   await resetWatchlist();
   parseHandler = async () => ({ status: "success", priceTry: 100, title: "Old title" });
   await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
-  let started;
-  const fetchStarted = new Promise(resolve => { started = resolve; });
-  let completeParse;
-  const parsed = new Promise(resolve => { completeParse = resolve; });
-  fetchHandler = async () => { started(); return htmlResponse("B0D47HCRZ6"); };
-  parseHandler = () => parsed;
-  const checking = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
-  await fetchStarted;
+  const oldParse = deferred();
+  const newParse = deferred();
+  const oldStarted = deferred();
+  const newStarted = deferred();
+  const parseCalls = [{ ...oldParse, started: oldStarted }, { ...newParse, started: newStarted }];
+  fetchHandler = async () => htmlResponse("B0D47HCRZ6");
+  parseHandler = () => {
+    const next = parseCalls.shift();
+    next.started.resolve();
+    return next.promise;
+  };
+
+  const oldCheck = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+  await oldStarted.promise;
   await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
-  await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
-  completeParse({ status: "success", priceTry: 999, title: "Stale title" });
-  await checking;
+  const readd = message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  await newStarted.promise;
+  assert.equal((await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" })).status, "busy");
+
+  oldParse.resolve({ status: "success", priceTry: 999, title: "Stale title" });
+  const oldResult = await oldCheck;
+  assert.equal(oldResult.status, "failure");
+  assert.equal(oldResult.errorCode, "CHECK_CANCELLED");
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "checking");
   assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, null);
   assert.notEqual(stored.watchlist.products.B0D47HCRZ6.title, "Stale title");
+  assert.equal((await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" })).status, "busy");
+
+  newParse.resolve({ status: "success", priceTry: 888, title: "New title" });
+  const added = await readd;
+  assert.equal(added.check.status, "success");
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 888);
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.title, "New title");
+});
+
+test("a restarted service worker recovers orphaned checks and preserves successful data", async () => {
+  await resetWatchlist();
+  parseHandler = async () => ({ status: "success", priceTry: 777, title: "Saved title" });
+  await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  const product = stored.watchlist.products.B0D47HCRZ6;
+  product.lastSuccessfulPriceTry = 777;
+  product.lastSuccessfulCheckAt = "2026-10-20T12:00:00.000Z";
+  product.lastAttemptedCheckAt = "2026-10-21T12:00:00.000Z";
+  product.lastCheckStatus = "checking";
+  product.lastErrorCode = null;
+
+  await import("../background.js?service-worker-restart");
+  const recovered = (await message("GET_WATCHLIST")).watchlist.products.B0D47HCRZ6;
+  assert.equal(recovered.lastCheckStatus, "failure");
+  assert.equal(recovered.lastErrorCode, "CHECK_INTERRUPTED");
+  assert.equal(recovered.lastSuccessfulPriceTry, 777);
+  assert.equal(recovered.lastSuccessfulCheckAt, "2026-10-20T12:00:00.000Z");
+  assert.equal(recovered.lastAttemptedCheckAt, "2026-10-21T12:00:00.000Z");
+  assert.equal(recovered.title, "Saved title");
+  assert.equal(recovered.asin, "B0D47HCRZ6");
+
+  parseHandler = async () => ({ status: "success", priceTry: 778, title: null });
+  assert.equal((await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" })).status, "success");
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 778);
+});
+
+test("watchlist reads do not interrupt a genuinely active check", async () => {
+  await resetWatchlist();
+  await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  const parsed = deferred();
+  const started = deferred();
+  fetchHandler = async () => { started.resolve(); return htmlResponse("B0D47HCRZ6"); };
+  parseHandler = () => parsed.promise;
+
+  const checkPromise = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+  await started.promise;
+  const duringCheck = (await message("GET_WATCHLIST")).watchlist.products.B0D47HCRZ6;
+  assert.equal(duringCheck.lastCheckStatus, "checking");
+  assert.notEqual(duringCheck.lastErrorCode, "CHECK_INTERRUPTED");
+
+  parsed.resolve({ status: "success", priceTry: 400, title: null });
+  assert.equal((await checkPromise).status, "success");
 });
 
 test("watchlist rendering treats untrusted titles as plain text", () => {
@@ -392,4 +461,5 @@ test("watchlist rendering treats untrusted titles as plain text", () => {
   assert.equal(row.children[0].textContent, untrustedTitle);
   assert.equal(row.children[0].children.length, 0);
   assert.equal(normalizeProductTitle(`  ${untrustedTitle}  `), untrustedTitle);
+  assert.match(errorMessage("CHECK_INTERRUPTED"), /yeniden başladığı için kesildi/);
 });
