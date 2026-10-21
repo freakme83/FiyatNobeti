@@ -207,7 +207,7 @@ function productInstance(asin) {
   return identity;
 }
 
-async function checkWatchlistProduct(asin, { automatic = false, expectedIdentity } = {}) {
+async function checkWatchlistProduct(asin, { automatic = false, expectedIdentity, bypassEligibility = false } = {}) {
   if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) return { status: "failure", errorCode: "INVALID_PRODUCT" };
   asin = asin.toUpperCase();
   let flightKey;
@@ -222,7 +222,7 @@ async function checkWatchlistProduct(asin, { automatic = false, expectedIdentity
         const settings = await readAutoSettings();
         const state = await readAutoState();
         if (!settings.enabled || identity !== expectedIdentity ||
-            nextEligibleAt(product, state.unknownSince[asin]) > Date.now()) return { skipped: true };
+            !bypassEligibility && nextEligibleAt(product, state.unknownSince[asin]) > Date.now()) return { skipped: true };
       }
       flightKey = `${asin}:${identity}`;
       if (inFlightChecks.has(flightKey)) return { busy: true };
@@ -479,6 +479,73 @@ async function runAutomaticAlarm() {
 let recoveryFailed = false;
 const startupRecovery = recoverInterruptedChecks().catch(() => { recoveryFailed = true; });
 startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});
+
+function devDiagnostic(result, asin = null) {
+  return {
+    asin,
+    outcome: result.status,
+    ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+    checkedAt: result.checkedAt || new Date().toISOString()
+  };
+}
+
+export async function runOneAutomaticCheckForDev() {
+  await startupRecovery;
+  if (recoveryFailed) return devDiagnostic({ status: "failure", errorCode: "STORAGE_ERROR" });
+  if (automaticRun) return devDiagnostic({ status: "busy", errorCode: "AUTOMATIC_CHECK_RUNNING" });
+
+  automaticRun = (async () => {
+    const selected = await withWatchlistLock(async () => {
+      const settings = await readAutoSettings();
+      const state = await readAutoState();
+      const now = Date.now();
+      if (!settings.enabled) {
+        await scheduleAutomaticLocked(now);
+        return { diagnostic: devDiagnostic({ status: "skipped", errorCode: "AUTOMATIC_DISABLED" }) };
+      }
+
+      const products = prepareEligibility(await readWatchlist(), state, now);
+      await saveAutoState(state);
+      if (!products.length) {
+        await scheduleAutomaticLocked(now);
+        return { diagnostic: devDiagnostic({ status: "skipped", errorCode: "NO_PRODUCTS" }) };
+      }
+
+      const asin = products[0].asin;
+      if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
+        state.lastErrorCode = "PERMISSION_REQUIRED";
+        state.notBefore = new Date(now + AUTO_INTERVAL_MS).toISOString();
+        state.nextRunAt = null;
+        await saveAutoState(state);
+        await scheduleAutomaticLocked(now);
+        return { diagnostic: devDiagnostic({ status: "failure", errorCode: "PERMISSION_REQUIRED" }, asin) };
+      }
+
+      return { asin, identity: productInstance(asin) };
+    });
+    if (selected.diagnostic) return selected.diagnostic;
+
+    const result = await checkWatchlistProduct(selected.asin, {
+      automatic: true,
+      expectedIdentity: selected.identity,
+      bypassEligibility: true
+    });
+    await withWatchlistLock(async () => {
+      const state = await readAutoState();
+      state.nextRunAt = null;
+      if (result.status !== "busy" && result.status !== "skipped") {
+        state.notBefore = new Date(Date.now() + AUTO_INTERVAL_MS).toISOString();
+      }
+      await saveAutoState(state);
+      await scheduleAutomaticLocked();
+    });
+    return devDiagnostic(result, selected.asin);
+  })();
+
+  try { return await automaticRun; }
+  catch { return devDiagnostic({ status: "failure", errorCode: "STORAGE_ERROR" }); }
+  finally { automaticRun = undefined; }
+}
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== AUTO_ALARM_NAME) return;

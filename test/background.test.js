@@ -66,7 +66,23 @@ globalThis.fetch = async (url, options) => {
   if (fetchHandler) return fetchHandler(url, options);
   return fetchResult;
 };
-await import("../background.js");
+const { runOneAutomaticCheckForDev } = await import("../background.js");
+assert.equal(globalThis.fiyatNobetiDev, undefined);
+const productionListeners = { listener, alarmListener, installedListener };
+
+function useProductionBackground() {
+  ({ listener, alarmListener, installedListener } = productionListeners);
+}
+
+function enableDeveloperTestApi() {
+  if (globalThis.fiyatNobetiDev) return;
+  Object.defineProperty(globalThis, "fiyatNobetiDev", {
+    value: Object.freeze({ runOneAutomaticCheck: runOneAutomaticCheckForDev }),
+    enumerable: true,
+    configurable: false,
+    writable: false
+  });
+}
 
 async function check(url = previous.canonicalUrl) {
   return new Promise(resolve => {
@@ -742,5 +758,151 @@ test("malformed timestamps receive a persistent cooldown across a worker restart
     await message("GET_AUTO_SETTINGS");
     assert.equal(stored.automaticCheckState.unknownSince.B0D47HCRZ6, since);
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, firstDue);
+  });
+});
+
+test("developer trigger bypasses eligibility for one product and resumes the six-hour schedule", async () => {
+  useProductionBackground();
+  enableDeveloperTestApi();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0CQXKXBR7", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const requests = [];
+    fetchHandler = async (url, options) => {
+      requests.push({ url, options });
+      return htmlResponse(url.split("/").at(-1));
+    };
+    parseHandler = async () => ({ status: "success", priceTry: 321, title: "Test ürünü" });
+
+    const result = await globalThis.fiyatNobetiDev.runOneAutomaticCheck();
+
+    assert.deepEqual(result, {
+      asin: "B0CQXKXBR7",
+      outcome: "success",
+      checkedAt: new Date(clock.now).toISOString()
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, productUrl("B0CQXKXBR7"));
+    assert.equal(requests[0].options.credentials, "omit");
+    assert.equal(requests[0].options.cache, "no-store");
+    assert.equal(stored.watchlist.products.B0CQXKXBR7.lastSuccessfulPriceTry, 321);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, "2026-10-21T11:59:00.000Z");
+    assert.equal(stored.automaticChecks.intervalMinutes, 360);
+    assert.equal(AUTO_INTERVAL_MS, 6 * 60 * 60 * 1000);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    await alarmListener({ name: AUTO_ALARM_NAME, scheduledTime: clock.now });
+    assert.equal(requests.length, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("developer trigger never overlaps an existing automatic developer run", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const parsing = deferred();
+    const started = deferred();
+    let requests = 0;
+    fetchHandler = async () => { requests++; started.resolve(); return htmlResponse("B0D47HCRZ6"); };
+    parseHandler = () => parsing.promise;
+
+    const first = globalThis.fiyatNobetiDev.runOneAutomaticCheck();
+    await started.promise;
+    const duplicate = await globalThis.fiyatNobetiDev.runOneAutomaticCheck();
+    assert.equal(duplicate.outcome, "busy");
+    assert.equal(duplicate.errorCode, "AUTOMATIC_CHECK_RUNNING");
+    assert.equal(requests, 1);
+
+    parsing.resolve({ status: "success", priceTry: 456, title: null });
+    assert.equal((await first).outcome, "success");
+    assert.equal(requests, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("developer trigger does not duplicate a manual check already active for the product", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const parsing = deferred();
+    const started = deferred();
+    let requests = 0;
+    fetchHandler = async () => { requests++; started.resolve(); return htmlResponse("B0D47HCRZ6"); };
+    parseHandler = () => parsing.promise;
+
+    const manual = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+    await started.promise;
+    const result = await globalThis.fiyatNobetiDev.runOneAutomaticCheck();
+
+    assert.equal(result.asin, "B0D47HCRZ6");
+    assert.equal(result.outcome, "busy");
+    assert.equal(requests, 1);
+    parsing.resolve({ status: "success", priceTry: 654, title: null });
+    assert.equal((await manual).status, "success");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("developer trigger respects missing permission without fetching", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    permission = false;
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse(); };
+
+    const result = await globalThis.fiyatNobetiDev.runOneAutomaticCheck();
+
+    assert.equal(result.asin, "B0D47HCRZ6");
+    assert.equal(result.outcome, "failure");
+    assert.equal(result.errorCode, "PERMISSION_REQUIRED");
+    assert.equal(requests, 0);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, "2026-10-21T11:59:00.000Z");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("developer result cannot overwrite a removed and re-added product", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:59:00.000Z" });
+    const oldParse = deferred();
+    const newParse = deferred();
+    const oldStarted = deferred();
+    const newStarted = deferred();
+    const parses = [
+      { gate: oldParse, started: oldStarted },
+      { gate: newParse, started: newStarted }
+    ];
+    fetchHandler = async () => htmlResponse("B0D47HCRZ6");
+    parseHandler = () => {
+      const current = parses.shift();
+      current.started.resolve();
+      return current.gate.promise;
+    };
+
+    const oldCheck = globalThis.fiyatNobetiDev.runOneAutomaticCheck();
+    await oldStarted.promise;
+    await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
+    const readd = message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+    await newStarted.promise;
+
+    oldParse.resolve({ status: "success", priceTry: 999, title: "Eski ürün" });
+    const oldResult = await oldCheck;
+    assert.equal(oldResult.outcome, "failure");
+    assert.equal(oldResult.errorCode, "CHECK_CANCELLED");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "checking");
+    assert.notEqual(stored.watchlist.products.B0D47HCRZ6.title, "Eski ürün");
+
+    newParse.resolve({ status: "success", priceTry: 888, title: "Yeni ürün" });
+    assert.equal((await readd).check.status, "success");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 888);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.title, "Yeni ürün");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
   });
 });
