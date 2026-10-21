@@ -1,4 +1,6 @@
-export const AMAZON_PERMISSION_ORIGIN = "https://www.amazon.com.tr/*";
+import { AMAZON_PERMISSION_ORIGIN, AMAZON_SHORT_LINK_PERMISSION_ORIGIN, REQUIRED_AMAZON_ORIGINS, getMissingAmazonOrigins } from "./popup-permissions.js";
+
+export { AMAZON_PERMISSION_ORIGIN, AMAZON_SHORT_LINK_PERMISSION_ORIGIN };
 
 export function createPermissionOnboarding({
   permissions,
@@ -6,16 +8,23 @@ export function createPermissionOnboarding({
   onboardingView,
   normalView,
   permissionButton,
+  explanation,
   status,
   onAuthorized = () => {},
 }) {
   let requestPending = false;
   let normalStarted = false;
+  let missingOrigins = [...REQUIRED_AMAZON_ORIGINS];
 
   function showOnboarding(message = "") {
     loadingView.hidden = true;
     normalView.hidden = true;
     onboardingView.hidden = false;
+    if (explanation) {
+      explanation.textContent = missingOrigins.includes(AMAZON_PERMISSION_ORIGIN)
+        ? "Amazon Türkiye ürünlerini ve kısa paylaşım bağlantılarını takip edebilmek için Amazon erişim izni gerekiyor."
+        : "Kısa paylaşım bağlantılarını kullanabilmek için amzn.eu erişimini etkinleştirin.";
+    }
     status.textContent = message;
   }
 
@@ -32,10 +41,11 @@ export function createPermissionOnboarding({
 
   async function start() {
     try {
-      const permitted = await permissions.contains({ origins: [AMAZON_PERMISSION_ORIGIN] });
-      if (permitted === true) showNormal();
+      missingOrigins = await getMissingAmazonOrigins(permissions);
+      if (missingOrigins.length === 0) showNormal();
       else showOnboarding();
     } catch {
+      missingOrigins = [...REQUIRED_AMAZON_ORIGINS];
       showOnboarding("İzin durumu kontrol edilemedi. Yeniden deneyebilirsiniz.");
     }
   }
@@ -48,17 +58,24 @@ export function createPermissionOnboarding({
 
     try {
       // This API call is made synchronously from the explicit button gesture.
-      const requested = await permissions.request({ origins: [AMAZON_PERMISSION_ORIGIN] });
-      const currentlyPermitted = await permissions.contains({ origins: [AMAZON_PERMISSION_ORIGIN] });
-      if (requested === true && currentlyPermitted === true) {
+      const requested = await permissions.request({ origins: [...missingOrigins] });
+      missingOrigins = await getMissingAmazonOrigins(permissions);
+      if (missingOrigins.length === 0) {
         showNormal();
-      } else if (currentlyPermitted === true) {
-        showNormal();
-      } else {
+      } else if (requested === false) {
         showOnboarding("İzin verilmedi. İzin vermek için bu düğmeyi yeniden deneyebilirsiniz.");
+      } else {
+        showOnboarding("Bazı izinler eksik kaldı. Yeniden deneyebilirsiniz.");
       }
     } catch {
-      showOnboarding("İzin isteği tamamlanamadı. Yeniden deneyebilirsiniz.");
+      try {
+        missingOrigins = await getMissingAmazonOrigins(permissions);
+        if (missingOrigins.length === 0) showNormal();
+        else showOnboarding("İzin isteği tamamlanamadı. Yeniden deneyebilirsiniz.");
+      } catch {
+        missingOrigins = [...REQUIRED_AMAZON_ORIGINS];
+        showOnboarding("İzin isteği tamamlanamadı. Yeniden deneyebilirsiniz.");
+      }
     } finally {
       requestPending = false;
       permissionButton.disabled = false;

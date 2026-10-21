@@ -1,12 +1,13 @@
 import { parseAmazonInput } from "./src/url.js";
 import { errorMessage, renderProductRows } from "./src/watchlist-view.js";
 import { createPermissionOnboarding } from "./src/permission-onboarding.js";
-import { requestShortLinkPermission } from "./src/popup-permissions.js";
+import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
 const normalView = document.querySelector("#normal-view");
 const permissionButton = document.querySelector("#permission-button");
+const permissionExplanation = document.querySelector("#permission-explanation");
 const permissionStatus = document.querySelector("#permission-status");
 const form = document.querySelector("#add-form");
 const input = document.querySelector("#product-url");
@@ -89,16 +90,12 @@ form.addEventListener("submit", async event => {
   addButton.disabled = true;
   status.textContent = request.type === "short" ? "Amazon kısa bağlantısı çözümleniyor…" : "Ürün doğrulanıyor…";
   try {
-    if (request.type === "short") {
-      // Only short-link submissions may request this separate optional origin.
-      if (!await requestShortLinkPermission(chrome.permissions)) {
-        status.textContent = "Kısa Amazon bağlantısı için ek site izni verilmedi.";
-        return;
-      }
-    }
-    const amazonPermitted = await chrome.permissions.contains({ origins: ["https://www.amazon.com.tr/*"] });
-    if (amazonPermitted !== true) {
+    const submittedUrl = input.value;
+    const missingOrigins = await getMissingAmazonOrigins(chrome.permissions);
+    if (missingOrigins.length > 0) {
       await permissionOnboarding.start();
+      input.value = submittedUrl;
+      updateShortLinkNotice();
       return;
     }
     const result = await chrome.runtime.sendMessage({ type: "ADD_PRODUCT", url: input.value });
@@ -169,6 +166,7 @@ const permissionOnboarding = createPermissionOnboarding({
   onboardingView,
   normalView,
   permissionButton,
+  explanation: permissionExplanation,
   status: permissionStatus,
   onAuthorized() {
     loadWatchlist().catch(() => { status.textContent = errorMessage("STORAGE_ERROR"); });

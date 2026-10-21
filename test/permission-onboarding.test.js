@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AMAZON_PERMISSION_ORIGIN, createPermissionOnboarding } from "../src/permission-onboarding.js";
-import { AMAZON_SHORT_LINK_PERMISSION_ORIGIN, requestShortLinkPermission } from "../src/popup-permissions.js";
+import {
+  AMAZON_PERMISSION_ORIGIN,
+  AMAZON_SHORT_LINK_PERMISSION_ORIGIN,
+  createPermissionOnboarding,
+} from "../src/permission-onboarding.js";
+import { REQUIRED_AMAZON_ORIGINS, getMissingAmazonOrigins } from "../src/popup-permissions.js";
 
 class FakeElement {
   hidden = false;
@@ -18,32 +22,48 @@ function setup(permissions, onAuthorized = () => {}) {
   const onboardingView = new FakeElement();
   const normalView = new FakeElement();
   const permissionButton = new FakeElement();
+  const explanation = new FakeElement();
   const status = new FakeElement();
   const onboarding = createPermissionOnboarding({
-    permissions, loadingView, onboardingView, normalView, permissionButton, status, onAuthorized,
+    permissions,
+    loadingView,
+    onboardingView,
+    normalView,
+    permissionButton,
+    explanation,
+    status,
+    onAuthorized,
   });
-  return { onboarding, loadingView, onboardingView, normalView, permissionButton, status };
+  return { onboarding, loadingView, onboardingView, normalView, permissionButton, explanation, status };
 }
 
-function permissionMock(initial = false) {
-  let granted = initial;
+function permissionMock(initial = []) {
+  const granted = new Set(initial);
   const requests = [];
+  let requestHandler = async origins => {
+    for (const origin of origins) granted.add(origin);
+    return true;
+  };
+  let containsFailure = null;
   return {
     requests,
-    setGranted(value) { granted = value; },
+    granted,
+    setRequestHandler(handler) { requestHandler = handler; },
+    failContains(error) { containsFailure = error; },
     async contains(details) {
-      assert.deepEqual(details, { origins: [AMAZON_PERMISSION_ORIGIN] });
-      return granted;
+      assert.equal(details.origins.length, 1);
+      if (containsFailure) throw containsFailure;
+      return granted.has(details.origins[0]);
     },
     async request(details) {
-      requests.push(details);
-      return granted;
+      requests.push(structuredClone(details));
+      return requestHandler(details.origins, granted);
     },
   };
 }
 
-test("fresh install shows onboarding and keeps normal product controls hidden", async () => {
-  const permissions = permissionMock(false);
+test("fresh install shows onboarding and requests no permission on popup open", async () => {
+  const permissions = permissionMock();
   let normalLoads = 0;
   const ui = setup(permissions, () => { normalLoads += 1; });
 
@@ -52,147 +72,195 @@ test("fresh install shows onboarding and keeps normal product controls hidden", 
   assert.equal(ui.loadingView.hidden, true);
   assert.equal(ui.onboardingView.hidden, false);
   assert.equal(ui.normalView.hidden, true);
+  assert.match(ui.explanation.textContent, /Amazon Türkiye.*kısa paylaşım bağlantılarını/);
   assert.equal(normalLoads, 0);
   assert.deepEqual(permissions.requests, []);
 });
 
-test("permission is requested only by the button with exactly the Amazon Türkiye origin", async () => {
-  const permissions = permissionMock(false);
+test("the explicit onboarding click requests both missing origins together", async () => {
+  const permissions = permissionMock();
   const ui = setup(permissions);
   await ui.onboarding.start();
-  assert.deepEqual(permissions.requests, []);
 
+  assert.deepEqual(permissions.requests, []);
   await ui.permissionButton.click();
 
-  assert.deepEqual(permissions.requests, [{ origins: ["https://www.amazon.com.tr/*"] }]);
-  assert.equal(ui.onboardingView.hidden, false);
+  assert.deepEqual(permissions.requests, [{ origins: [AMAZON_PERMISSION_ORIGIN, AMAZON_SHORT_LINK_PERMISSION_ORIGIN] }]);
+  assert.equal(ui.normalView.hidden, false);
 });
 
-test("a confirmed grant transitions immediately to normal UI without a price check", async () => {
-  const permissions = permissionMock(false);
-  let normalLoads = 0;
-  let fetches = 0;
-  const ui = setup(permissions, () => { normalLoads += 1; });
-  await ui.onboarding.start();
-  permissions.request = async details => {
-    permissions.requests.push(details);
-    permissions.setGranted(true);
-    return true;
-  };
+test("an existing user with both permissions skips onboarding", async () => {
+  const permissions = permissionMock(REQUIRED_AMAZON_ORIGINS);
+  const ui = setup(permissions);
 
-  await ui.permissionButton.click();
+  await ui.onboarding.start();
 
   assert.equal(ui.onboardingView.hidden, true);
   assert.equal(ui.normalView.hidden, false);
-  assert.equal(normalLoads, 1);
-  assert.equal(fetches, 0);
+  assert.deepEqual(permissions.requests, []);
 });
 
-test("a true request result is not enough when contains reports that permission is absent", async () => {
-  const permissions = permissionMock(false);
+test("an Amazon-only installation is offered completion of the missing short-link permission", async () => {
+  const permissions = permissionMock([AMAZON_PERMISSION_ORIGIN]);
   const ui = setup(permissions);
+
   await ui.onboarding.start();
-  permissions.request = async () => true;
 
-  await ui.permissionButton.click();
-
+  assert.equal(ui.onboardingView.hidden, false);
   assert.equal(ui.normalView.hidden, true);
-  assert.equal(ui.onboardingView.hidden, false);
-  assert.match(ui.status.textContent, /İzin verilmedi/);
+  assert.match(ui.explanation.textContent, /amzn.eu/);
+  assert.deepEqual(permissions.requests, []);
+  await ui.permissionButton.click();
+  assert.deepEqual(permissions.requests, [{ origins: [AMAZON_SHORT_LINK_PERMISSION_ORIGIN] }]);
+  assert.equal(ui.normalView.hidden, false);
 });
 
-test("denial keeps onboarding available and a later retry can succeed", async () => {
-  const permissions = permissionMock(false);
+test("only currently missing origins are requested", async () => {
+  const permissions = permissionMock([AMAZON_SHORT_LINK_PERMISSION_ORIGIN]);
   const ui = setup(permissions);
   await ui.onboarding.start();
-
   await ui.permissionButton.click();
+
+  assert.deepEqual(permissions.requests, [{ origins: [AMAZON_PERMISSION_ORIGIN] }]);
+  assert.equal(ui.normalView.hidden, false);
+});
+
+test("partial approval keeps onboarding open and offers only the still-missing origin", async () => {
+  const permissions = permissionMock();
+  permissions.setRequestHandler(async (origins, granted) => {
+    granted.add(AMAZON_PERMISSION_ORIGIN);
+    return false;
+  });
+  const ui = setup(permissions);
+  await ui.onboarding.start();
+  await ui.permissionButton.click();
+
   assert.equal(ui.onboardingView.hidden, false);
+  assert.equal(ui.normalView.hidden, true);
+  assert.match(ui.explanation.textContent, /kısa paylaşım bağlantılarını kullanabilmek için amzn.eu/i);
+  assert.match(ui.status.textContent, /İzin verilmedi/);
+  permissions.setRequestHandler(async (origins, granted) => {
+    for (const origin of origins) granted.add(origin);
+    return true;
+  });
+  await ui.permissionButton.click();
+  assert.deepEqual(permissions.requests, [
+    { origins: [AMAZON_PERMISSION_ORIGIN, AMAZON_SHORT_LINK_PERMISSION_ORIGIN] },
+    { origins: [AMAZON_SHORT_LINK_PERMISSION_ORIGIN] },
+  ]);
+  assert.equal(ui.normalView.hidden, false);
+});
+
+test("denied permission keeps onboarding available for retry", async () => {
+  const permissions = permissionMock();
+  permissions.setRequestHandler(async () => false);
+  const ui = setup(permissions);
+  await ui.onboarding.start();
+  await ui.permissionButton.click();
+
+  assert.equal(ui.onboardingView.hidden, false);
+  assert.equal(ui.normalView.hidden, true);
   assert.equal(ui.permissionButton.disabled, false);
   assert.match(ui.status.textContent, /yeniden deneyebilirsiniz/);
 
-  permissions.request = async details => {
-    permissions.requests.push(details);
-    permissions.setGranted(true);
+  permissions.setRequestHandler(async (origins, granted) => {
+    for (const origin of origins) granted.add(origin);
     return true;
-  };
+  });
   await ui.permissionButton.click();
   assert.equal(ui.normalView.hidden, false);
-  assert.equal(permissions.requests.length, 2);
 });
 
-test("permission API rejections leave a recoverable onboarding state", async () => {
-  const permissions = permissionMock(false);
+test("rejected permission API calls are handled without exposing exception text", async () => {
+  const permissions = permissionMock();
   const ui = setup(permissions);
   await ui.onboarding.start();
-  permissions.request = async () => { throw new Error("private implementation detail"); };
-
+  permissions.setRequestHandler(async () => { throw new Error("internal browser detail"); });
   await ui.permissionButton.click();
 
   assert.equal(ui.onboardingView.hidden, false);
   assert.equal(ui.normalView.hidden, true);
   assert.match(ui.status.textContent, /Yeniden deneyebilirsiniz/);
-  assert.doesNotMatch(ui.status.textContent, /private implementation detail/);
+  assert.doesNotMatch(ui.status.textContent, /internal browser detail/);
 });
 
-test("already-authorized and reopened users go directly to normal UI", async () => {
-  const permissions = permissionMock(true);
-  let normalLoads = 0;
-  const first = setup(permissions, () => { normalLoads += 1; });
-  await first.onboarding.start();
-  const reopened = setup(permissions, () => { normalLoads += 1; });
-  await reopened.onboarding.start();
-
-  assert.equal(first.normalView.hidden, false);
-  assert.equal(reopened.normalView.hidden, false);
-  assert.equal(first.onboardingView.hidden, true);
-  assert.equal(reopened.onboardingView.hidden, true);
-  assert.equal(permissions.requests.length, 0);
-  assert.equal(normalLoads, 2);
-});
-
-test("revoked permission shows onboarding again without touching saved products", async () => {
-  const products = { B0FZ9Y4GPF: { asin: "B0FZ9Y4GPF", lastSuccessfulPriceTry: 36399 } };
-  const before = structuredClone(products);
-  const permissions = permissionMock(false);
-  let normalLoads = 0;
-  const ui = setup(permissions, () => { normalLoads += 1; });
-
+test("a failed permission-state lookup leaves an actionable onboarding state", async () => {
+  const permissions = permissionMock();
+  permissions.failContains(new Error("internal detail"));
+  const ui = setup(permissions);
   await ui.onboarding.start();
 
   assert.equal(ui.onboardingView.hidden, false);
-  assert.equal(normalLoads, 0);
-  assert.deepEqual(products, before);
+  assert.match(ui.status.textContent, /İzin durumu kontrol edilemedi/);
+  assert.deepEqual(permissions.requests, []);
 });
 
-test("rapid repeated clicks create only one in-flight permission request", async () => {
-  const permissions = permissionMock(false);
-  let resolveRequest;
-  permissions.request = details => {
-    permissions.requests.push(details);
-    return new Promise(resolve => { resolveRequest = resolve; });
-  };
+test("reopening after approval shows the normal UI from current permission state", async () => {
+  const permissions = permissionMock();
+  const first = setup(permissions);
+  await first.onboarding.start();
+  await first.permissionButton.click();
+
+  const reopened = setup(permissions);
+  await reopened.onboarding.start();
+  assert.equal(reopened.onboardingView.hidden, true);
+  assert.equal(reopened.normalView.hidden, false);
+  assert.equal(permissions.requests.length, 1);
+});
+
+test("revoking either origin returns to onboarding without changing saved products", async () => {
+  for (const revoked of REQUIRED_AMAZON_ORIGINS) {
+    const products = { B0FZ9Y4GPF: { asin: "B0FZ9Y4GPF", lastSuccessfulPriceTry: 36399 } };
+    const before = structuredClone(products);
+    const permissions = permissionMock(REQUIRED_AMAZON_ORIGINS);
+    permissions.granted.delete(revoked);
+    const ui = setup(permissions);
+    await ui.onboarding.start();
+
+    assert.equal(ui.onboardingView.hidden, false, revoked);
+    assert.equal(ui.normalView.hidden, true, revoked);
+    assert.deepEqual(products, before);
+    assert.deepEqual(permissions.requests, []);
+  }
+});
+
+test("product submission preflight never prompts and accepts either URL type when both permissions exist", async () => {
+  const permissions = permissionMock(REQUIRED_AMAZON_ORIGINS);
+  assert.deepEqual(await getMissingAmazonOrigins(permissions), []);
+  // Both the normal and short-link submission paths use this read-only permission gate.
+  assert.deepEqual(await getMissingAmazonOrigins(permissions), []);
+  assert.deepEqual(permissions.requests, []);
+});
+
+test("granting permissions initializes the normal UI without triggering a price fetch", async () => {
+  const permissions = permissionMock();
+  let fetches = 0;
+  let viewInitializations = 0;
+  const ui = setup(permissions, () => { viewInitializations += 1; });
+  await ui.onboarding.start();
+  await ui.permissionButton.click();
+
+  assert.equal(viewInitializations, 1);
+  assert.equal(fetches, 0);
+  assert.equal(ui.normalView.hidden, false);
+});
+
+test("repeated permission-button clicks do not overlap requests", async () => {
+  const permissions = permissionMock();
+  let finishRequest;
+  permissions.setRequestHandler(origins => new Promise(resolve => {
+    finishRequest = result => {
+      if (result) for (const origin of origins) permissions.granted.add(origin);
+      resolve(result);
+    };
+  }));
   const ui = setup(permissions);
   await ui.onboarding.start();
 
   const first = ui.permissionButton.click();
   const second = ui.permissionButton.click();
   assert.equal(permissions.requests.length, 1);
-  resolveRequest(false);
+  finishRequest(true);
   await Promise.all([first, second]);
   assert.equal(ui.permissionButton.disabled, false);
-});
-
-test("short-link permission remains separate and is requested only through its helper", async () => {
-  const calls = [];
-  const permissions = {
-    async request(details) { calls.push(["request", details]); return true; },
-    async contains(details) { calls.push(["contains", details]); return true; },
-  };
-  assert.equal(await requestShortLinkPermission(permissions), true);
-  assert.deepEqual(calls, [
-    ["request", { origins: [AMAZON_SHORT_LINK_PERMISSION_ORIGIN] }],
-    ["contains", { origins: [AMAZON_SHORT_LINK_PERMISSION_ORIGIN] }],
-  ]);
-  assert.equal(AMAZON_SHORT_LINK_PERMISSION_ORIGIN, "https://amzn.eu/*");
 });
