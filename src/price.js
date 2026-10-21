@@ -1,4 +1,19 @@
 const PRIMARY_SELECTOR = "#corePrice_feature_div .a-offscreen";
+const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
+const MAX_PRICE_ANCESTORS = 6;
+
+function isUnitPriceCandidate(candidate) {
+  let ancestor = candidate?.parentElement;
+  for (let depth = 0; ancestor && depth < MAX_PRICE_ANCESTORS; depth++, ancestor = ancestor.parentElement) {
+    const classes = ancestor.classList;
+    if (!classes || !Number.isInteger(classes.length) || typeof classes.item !== "function") continue;
+    for (let index = 0; index < classes.length; index++) {
+      const className = classes.item(index);
+      if (typeof className === "string" && className.startsWith(UNIT_PRICE_CLASS_PREFIX)) return true;
+    }
+  }
+  return false;
+}
 
 export function parseTurkishPrice(value) {
   if (typeof value !== "string") return null;
@@ -26,7 +41,7 @@ export function extractPrimaryPrice(doc) {
   if (!doc.querySelector("#corePrice_feature_div")) {
     return { status: "failure", errorCode: "HTML_STRUCTURE" };
   }
-  const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)];
+  const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)].filter(candidate => !isUnitPriceCandidate(candidate));
   if (candidates.length > 1) {
     return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
   }
