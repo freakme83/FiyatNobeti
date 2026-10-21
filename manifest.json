@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "FiyatNöbeti",
+  "version": "0.1.0",
+  "description": "Amazon Türkiye için elle başlatılan deneysel fiyat sorgusu.",
+  "permissions": ["storage", "offscreen"],
+  "optional_host_permissions": [
+    "https://www.amazon.com.tr/*",
+    "https://amzn.eu/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "FiyatNöbeti",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; img-src 'none'; frame-src 'none'; connect-src https://www.amazon.com.tr https://amzn.eu"
+  }
+}

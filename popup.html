@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FiyatNöbeti</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>FiyatNöbeti</h1>
+      <p class="intro">Amazon Türkiye ürününün fiyatını elle kontrol edin.</p>
+      <form id="probe-form">
+        <label for="product-url">Ürün bağlantısı</label>
+        <input id="product-url" type="url" required spellcheck="false"
+          placeholder="https://www.amazon.com.tr/dp/B0FZ9Y4GPF">
+        <p id="short-link-notice" class="notice" role="note" aria-live="polite" hidden>
+          Yalnızca Amazon uygulamasından veya sitesinden kendiniz kopyaladığınız, güvendiğiniz ürün bağlantılarını kullanın.
+        </p>
+        <button id="check-button" type="submit">Fiyatı kontrol et</button>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+      <section id="latest" hidden aria-label="Son sorgu"></section>
+      <section id="previous" hidden aria-label="Önceki başarılı sorgu"></section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
