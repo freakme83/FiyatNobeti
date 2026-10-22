@@ -1,4 +1,4 @@
-import { extractPrimaryPrice, extractProductTitle, parseTurkishPrice } from "../src/price.js";
+import { extractPrimaryPrice, extractProductTitle, inspectPayablePriceCandidate, parseTurkishPrice } from "../src/price.js";
 
 const MAX_COUNT = 100;
 const MAX_LABELS_INSPECTED = 3;
@@ -11,12 +11,15 @@ const MAX_REGION_TOKENS = 5;
 // Only exact, stable Amazon layout tokens may leave the diagnostic.
 const SAFE_IDS = new Set([
   "apex-pricetopay-accessibility-label",
+  "apex_offerDisplay_expanded",
   "apex-pricetopay_feature_div",
   "apex_pricetopay_feature_div",
   "apex_desktop",
   "buybox",
   "centerCol",
   "corePrice_feature_div",
+  "corePriceDisplay_desktop_feature_div",
+  "desktop_qualifiedBuyBox",
   "desktop_buybox",
   "rightCol"
 ]);
@@ -31,13 +34,17 @@ const SAFE_CLASSES = new Set([
   "apex-priceperunit-alt",
   "apex-priceperunit-container",
   "apex-priceperunit-desktop",
-  "apex-pricetoprice"
+  "apex-pricetoprice",
+  "apex-core-price-identifier"
 ]);
 const PRICE_REGION_IDS = new Set([
   "apex-pricetopay_feature_div",
   "apex_pricetopay_feature_div"
 ]);
-const PURCHASE_REGION_IDS = new Set(["apex_desktop", "buybox", "centerCol", "desktop_buybox", "rightCol"]);
+const PURCHASE_REGION_IDS = new Set([
+  "apex_desktop", "apex_offerDisplay_expanded", "buybox", "centerCol",
+  "corePriceDisplay_desktop_feature_div", "desktop_qualifiedBuyBox", "desktop_buybox", "rightCol"
+]);
 // This mirrors PR #8's existing rejection rule; matching values are never emitted.
 const EXCLUDED_PRICE_CONTEXT = /(?:coupon|shipping|installment|monthly|used|other.?seller|recommend|similar|variation|format|unit|discount|list.?price)/i;
 
@@ -101,7 +108,7 @@ function safeAncestry(candidate) {
   return { ancestry, truncated: Boolean(node) };
 }
 
-function nearbyPriceRegion(candidate) {
+function nearbyPriceRegion(candidate, recognizedMainPurchaseRegion) {
   const tokens = [];
   let kind = null;
   let ancestor = candidate?.parentElement;
@@ -118,6 +125,7 @@ function nearbyPriceRegion(candidate) {
       tokens.push(`id:${structure.safeId}`);
       if (!kind) {
         kind = PRICE_REGION_IDS.has(structure.safeId) ? "PRICE_TO_PAY" :
+          ["apex_offerDisplay_expanded", "corePriceDisplay_desktop_feature_div", "desktop_qualifiedBuyBox"].includes(structure.safeId) ? "PURCHASING_REGION" :
           structure.safeId === "corePrice_feature_div" ? "PRIMARY_PRICE_CONTAINER" : "PURCHASING_REGION";
       }
     }
@@ -126,27 +134,22 @@ function nearbyPriceRegion(candidate) {
   }
   return {
     identified: Boolean(kind),
-    kind: kind || "UNKNOWN",
+    kind: recognizedMainPurchaseRegion ? "MAIN_PURCHASE_PRICE_REGION" : (kind || "UNKNOWN"),
     tokens: tokens.slice(0, MAX_REGION_TOKENS),
     truncated: Boolean(ancestor)
   };
 }
 
-function qualifiesFallback(candidate, core, allCandidates, primaryGate, excludedContext) {
+function qualifiesFallback(doc, candidate, allCandidates, primaryGate, excludedContext) {
   if (primaryGate) return { wouldQualify: false, rejectionReason: primaryGate };
   if (allCandidates.length > 1) return { wouldQualify: false, rejectionReason: "MULTIPLE_LABELS" };
-  const structure = readStructuralNode(candidate);
-  if (structure.tagName !== "span") return { wouldQualify: false, rejectionReason: "WRONG_ELEMENT_TAG" };
   if (excludedContext.excluded) return { wouldQualify: false, rejectionReason: "EXCLUDED_CONTEXT" };
   if (excludedContext.truncated) return { wouldQualify: null, rejectionReason: excludedContext.truncationReason };
-  if (!core?.contains?.(candidate)) return { wouldQualify: false, rejectionReason: "OUTSIDE_PRIMARY_CONTAINER" };
-  if (parseTurkishPrice(typeof candidate.textContent === "string" ? candidate.textContent : "") === null) {
-    return { wouldQualify: false, rejectionReason: "UNRECOGNIZED_TRY_AMOUNT" };
-  }
-  return { wouldQualify: true, rejectionReason: null };
+  const result = inspectPayablePriceCandidate(doc, candidate);
+  return { wouldQualify: result.qualified, rejectionReason: result.rejectionReason };
 }
 
-function inspectPayablePriceLabels(labels, core, parserOutcome, primaryGate) {
+function inspectPayablePriceLabels(doc, labels, core, parserOutcome, primaryGate) {
   return {
     inspectedCount: Math.min(labels.length, MAX_LABELS_INSPECTED),
     inspectionTruncated: labels.length > MAX_LABELS_INSPECTED,
@@ -154,14 +157,15 @@ function inspectPayablePriceLabels(labels, core, parserOutcome, primaryGate) {
       const excludedContext = isExcludedPriceContext(candidate);
       const qualification = ["BOT_VERIFICATION", "ACCESS_DENIED", "AUTH_REQUIRED"].includes(parserOutcome.errorCode)
         ? { wouldQualify: false, rejectionReason: "SECURITY_OR_AUTH_PAGE" }
-        : qualifiesFallback(candidate, core, labels, primaryGate, excludedContext);
+        : qualifiesFallback(doc, candidate, labels, primaryGate, excludedContext);
+      const structuralQualification = inspectPayablePriceCandidate(doc, candidate);
       const ancestry = safeAncestry(candidate);
       return {
         insidePrimaryContainer: Boolean(core?.contains?.(candidate)),
         tagName: readStructuralNode(candidate).tagName,
         ancestry: ancestry.ancestry,
         ancestryTruncated: ancestry.truncated,
-        nearbyPriceRegion: nearbyPriceRegion(candidate),
+        nearbyPriceRegion: nearbyPriceRegion(candidate, structuralQualification.purchaseRegion),
         insideExcludedContext: excludedContext.excluded,
         fallback: qualification
       };
@@ -205,7 +209,7 @@ export function inspectPriceDocument(doc) {
       apexPriceToPayLabelCount: capped(apex.length),
       apexPriceToPayCountCapped: apex.length > MAX_COUNT,
       apexPriceToPayOutsidePrimaryCount: capped(apex.filter(node => !core?.contains(node)).length),
-      apexPriceToPay: inspectPayablePriceLabels(apex, core, parsed, primaryGate),
+      apexPriceToPay: inspectPayablePriceLabels(doc, apex, core, parsed, primaryGate),
       priceOffscreenOutsidePrimaryCount: capped([...offscreen].filter(node => !core?.contains(node)).length)
     },
     parserOutcome: {

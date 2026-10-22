@@ -15,7 +15,8 @@ function element(tagName, { id = "", classes = [], textContent = "" } = {}) {
     children,
     classList: {
       get length() { return classes.length; },
-      item(index) { return classes[index] ?? null; }
+      item(index) { return classes[index] ?? null; },
+      contains(value) { return classes.includes(value); }
     },
     append(child) {
       child.parentElement = node;
@@ -69,6 +70,11 @@ function fixture({ labelTrees = [], primaryPriceTexts = [], outsidePrices = [], 
         return false;
       })];
       if (selector === `#${LABEL_ID}`) return labels;
+      if (/^#[\w-]+$/.test(selector)) return allDescendants(root).filter(node => node.id === selector.slice(1));
+      if (/^\.[\w-]+$/.test(selector)) return allDescendants(root).filter(node => {
+        for (let index = 0; index < node.classList.length; index++) if (node.classList.item(index) === selector.slice(1)) return true;
+        return false;
+      });
       throw new Error(`unexpected selector ${selector}`);
     }
   };
@@ -82,30 +88,39 @@ const makeLabel = (location, { wrapperId = "", wrapperClasses = [], labelTag = "
   return label;
 };
 
+const makeQualifiedLabel = (location, { extraClasses = [], labelTag = "span", labelText = "" } = {}) => ({ root, core }) => {
+  const parent = location === "inside" ? core : root;
+  const desktop = parent.append(element("div", { id: "desktop_qualifiedBuyBox" }));
+  const offer = desktop.append(element("div", { id: "apex_offerDisplay_expanded" }));
+  const price = offer.append(element("div", { id: "corePriceDisplay_desktop_feature_div" }));
+  const identifier = price.append(element("div", { classes: ["apex-core-price-identifier", ...extraClasses] }));
+  return identifier.append(element(labelTag, { id: LABEL_ID, textContent: labelText }));
+};
+
 test("reports capped label count, primary containment, tag, and bounded ancestry", () => {
   const { doc } = fixture({ labelTrees: [
-    makeLabel("inside", { wrapperId: "apex_pricetopay_feature_div", wrapperClasses: ["apex-pricetoprice"], labelText: "194,74 TL" })
+    makeQualifiedLabel("inside", { labelText: "194,74 TL" })
   ] });
   const report = inspectPriceDocument(doc);
   assert.equal(report.alternatives.apexPriceToPayLabelCount, 1);
   const [label] = report.alternatives.apexPriceToPay.elements;
   assert.equal(label.insidePrimaryContainer, true);
   assert.equal(label.tagName, "span");
-  assert.deepEqual(label.ancestry.map(item => item.tagName), ["span", "div", "div", "html"]);
+  assert.deepEqual(label.ancestry.map(item => item.tagName), ["span", "div", "div", "div", "div", "div", "html"]);
   assert.equal(label.ancestryTruncated, false);
   assert.equal(label.nearbyPriceRegion.identified, true);
-  assert.equal(label.nearbyPriceRegion.kind, "PRICE_TO_PAY");
+  assert.equal(label.nearbyPriceRegion.kind, "MAIN_PURCHASE_PRICE_REGION");
   assert.equal(label.fallback.wouldQualify, true);
   assert.equal(label.fallback.rejectionReason, null);
 });
 
-test("reports an outside label and why the current fallback rejects it", () => {
-  const { doc } = fixture({ labelTrees: [makeLabel("outside")] });
+test("reports the observed qualified purchase region even when it is outside the primary container", () => {
+  const { doc } = fixture({ labelTrees: [makeQualifiedLabel("outside", { labelText: "194,74 TL" })] });
   const report = inspectPriceDocument(doc);
   const [label] = report.alternatives.apexPriceToPay.elements;
   assert.equal(label.insidePrimaryContainer, false);
-  assert.equal(label.fallback.wouldQualify, false);
-  assert.equal(label.fallback.rejectionReason, "OUTSIDE_PRIMARY_CONTAINER");
+  assert.equal(label.fallback.wouldQualify, true);
+  assert.equal(label.fallback.rejectionReason, null);
 });
 
 test("marks every candidate ambiguous when multiple payable-price labels exist", () => {
@@ -117,7 +132,7 @@ test("marks every candidate ambiguous when multiple payable-price labels exist",
 
 test("reports element-tag and unparseable-TRY rejection reasons without returning candidate text", () => {
   const wrongTag = fixture({ labelTrees: [makeLabel("inside", { labelTag: "div", labelText: "194,74 TL" })] });
-  const invalidAmount = fixture({ labelTrees: [makeLabel("inside", { labelText: "194,74 TL / ay" })] });
+  const invalidAmount = fixture({ labelTrees: [makeQualifiedLabel("outside", { labelText: "194,74 TL / ay" })] });
   const wrong = inspectPriceDocument(wrongTag.doc).alternatives.apexPriceToPay.elements[0];
   const invalid = inspectPriceDocument(invalidAmount.doc).alternatives.apexPriceToPay.elements[0];
   assert.equal(wrong.fallback.rejectionReason, "WRONG_ELEMENT_TAG");
@@ -133,16 +148,15 @@ test("reports a missing label with an empty inspected list", () => {
 });
 
 test("identifies recognized payable-price and purchase ancestry using exact allowlisted tokens", () => {
-  const { doc } = fixture({ labelTrees: [
-    makeLabel("inside", { wrapperId: "buybox", wrapperClasses: ["apex-pricetoprice"], labelText: "194,74 TL" })
-  ] });
+  const { doc } = fixture({ labelTrees: [makeQualifiedLabel("outside", { labelText: "194,74 TL" })] });
   const label = inspectPriceDocument(doc).alternatives.apexPriceToPay.elements[0];
-  assert.deepEqual(label.nearbyPriceRegion, {
-    identified: true,
-    kind: "PRICE_TO_PAY",
-    tokens: ["class:apex-pricetoprice", "id:buybox", "id:corePrice_feature_div"],
-    truncated: false
-  });
+  assert.equal(label.nearbyPriceRegion.identified, true);
+  assert.equal(label.nearbyPriceRegion.kind, "MAIN_PURCHASE_PRICE_REGION");
+  assert.deepEqual(label.nearbyPriceRegion.tokens, [
+    "id:corePriceDisplay_desktop_feature_div",
+    "id:apex_offerDisplay_expanded",
+    "id:desktop_qualifiedBuyBox"
+  ]);
 });
 
 test("reports unrecognized ancestry without exposing unknown IDs or classes", () => {
@@ -225,7 +239,7 @@ test("diagnostic output contains no page text, price, URL, form value, or person
 });
 
 test("diagnostic inspection does not change production parser outcomes", () => {
-  const qualified = fixture({ labelTrees: [makeLabel("inside", { labelText: "194,74 TL" })], primaryPriceTexts: [] });
+  const qualified = fixture({ labelTrees: [makeQualifiedLabel("outside", { labelText: "194,74 TL" })], primaryPriceTexts: [] });
   const rejected = fixture({ labelTrees: [makeLabel("outside")], primaryPriceTexts: [] });
   const primary = fixture({ labelTrees: [makeLabel("outside")], primaryPriceTexts: ["599,99 TL"] });
   const outcomes = [qualified, rejected, primary].map(({ doc }) => {
