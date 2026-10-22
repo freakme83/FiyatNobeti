@@ -1,258 +1,1 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import {
-  createPopupNotificationPreferences,
-  DEFAULT_NOTIFICATION_PREFERENCES,
-  getEffectiveNotificationPreferences,
-  normalizeNotificationPreferences,
-  NOTIFICATION_PREFERENCES_KEY
-} from "../src/notification-preferences.js";
-import { createPopupWatchlistSync } from "../src/popup-watchlist-sync.js";
-
-const defaults = () => ({ version: 1, enabled: true, notifyOnDecrease: true, notifyOnIncrease: false });
-const stored = values => structuredClone(values);
-
-function createStorage(initial = {}, hooks = {}) {
-  const data = stored(initial);
-  const listeners = new Set();
-  const writes = [];
-  let reads = 0;
-  return {
-    data,
-    listeners,
-    writes,
-    api: {
-      local: {
-        async get(key) {
-          reads++;
-          if (hooks.get) return hooks.get(key, reads, data);
-          return { [key]: stored(data[key]) };
-        },
-        async set(values) {
-          writes.push(stored(values));
-          if (hooks.beforeSet) await hooks.beforeSet(values, writes.length);
-          for (const [key, value] of Object.entries(values)) {
-            const oldValue = stored(data[key]);
-            data[key] = stored(value);
-            for (const listener of [...listeners]) listener({ [key]: { oldValue, newValue: stored(value) } }, "local");
-          }
-        }
-      },
-      onChanged: {
-        addListener(listener) { listeners.add(listener); },
-        removeListener(listener) { listeners.delete(listener); }
-      }
-    },
-    emit(key, newValue, areaName = "local") {
-      const oldValue = stored(data[key]);
-      if (areaName === "local") data[key] = stored(newValue);
-      for (const listener of [...listeners]) listener({ [key]: { oldValue, newValue: stored(newValue) } }, areaName);
-    }
-  };
-}
-
-const tick = () => new Promise(resolve => setImmediate(resolve));
-function deferred() {
-  let resolve;
-  const promise = new Promise(complete => { resolve = complete; });
-  return { promise, resolve };
-}
-
-test("fresh install and legacy installation without a record receive the defaults", async () => {
-  assert.deepEqual(DEFAULT_NOTIFICATION_PREFERENCES, defaults());
-  for (const initial of [{}, { automaticChecks: { version: 1, enabled: false, intervalMinutes: 180 }, watchlist: { version: 1, products: {} } }]) {
-    const storage = createStorage(initial);
-    let view;
-    const controller = createPopupNotificationPreferences(storage.api, state => { view = state; });
-    await controller.load();
-    assert.deepEqual(view.preferences, defaults());
-    assert.deepEqual(view.effective, { enabled: true, notifyOnDecrease: true, notifyOnIncrease: false });
-    assert.equal(storage.data[NOTIFICATION_PREFERENCES_KEY], undefined);
-    assert.equal(storage.writes.length, 0);
-    controller.dispose();
-  }
-});
-
-test("direction preferences can be selected independently, including both or neither", async () => {
-  const storage = createStorage();
-  const controller = createPopupNotificationPreferences(storage.api, () => {});
-  await controller.load();
-  await controller.update("notifyOnDecrease", false);
-  assert.deepEqual(controller.getState().preferences, { version: 1, enabled: true, notifyOnDecrease: false, notifyOnIncrease: false });
-  await controller.update("notifyOnIncrease", true);
-  assert.deepEqual(controller.getState().effective, { enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  await controller.update("notifyOnDecrease", true);
-  assert.deepEqual(controller.getState().effective, { enabled: true, notifyOnDecrease: true, notifyOnIncrease: true });
-  await controller.update("notifyOnIncrease", false);
-  assert.deepEqual(controller.getState().effective, { enabled: true, notifyOnDecrease: true, notifyOnIncrease: false });
-  await controller.update("notifyOnDecrease", false);
-  assert.deepEqual(controller.getState().effective, { enabled: true, notifyOnDecrease: false, notifyOnIncrease: false });
-  controller.dispose();
-});
-
-test("master off disables both directions while preserving and restoring their selections", async () => {
-  const storage = createStorage({ [NOTIFICATION_PREFERENCES_KEY]: { version: 1, enabled: true, notifyOnDecrease: true, notifyOnIncrease: true } });
-  const controller = createPopupNotificationPreferences(storage.api, () => {});
-  await controller.load();
-  await controller.update("enabled", false);
-  assert.deepEqual(controller.getState().preferences, { version: 1, enabled: false, notifyOnDecrease: true, notifyOnIncrease: true });
-  assert.deepEqual(controller.getState().effective, { enabled: false, notifyOnDecrease: false, notifyOnIncrease: false });
-  await controller.update("enabled", true);
-  assert.deepEqual(controller.getState().effective, { enabled: true, notifyOnDecrease: true, notifyOnIncrease: true });
-  controller.dispose();
-});
-
-test("preferences persist after popup close, reopen, and simulated service-worker restart", async () => {
-  const storage = createStorage();
-  const firstPopup = createPopupNotificationPreferences(storage.api, () => {});
-  await firstPopup.load();
-  await firstPopup.update("notifyOnIncrease", true);
-  firstPopup.dispose();
-
-  const reopenedPopup = createPopupNotificationPreferences(storage.api, () => {});
-  await reopenedPopup.load();
-  assert.deepEqual(reopenedPopup.getState().preferences, { version: 1, enabled: true, notifyOnDecrease: true, notifyOnIncrease: true });
-  reopenedPopup.dispose();
-
-  // The preference schema is durable extension storage, independent of worker globals.
-  const afterWorkerRestart = createPopupNotificationPreferences(storage.api, () => {});
-  await afterWorkerRestart.load();
-  assert.equal(afterWorkerRestart.getState().effective.notifyOnIncrease, true);
-  afterWorkerRestart.dispose();
-});
-
-test("rapid toggles are serialized and an older write cannot replace the latest UI choice", async () => {
-  const gates = [];
-  const storage = createStorage({}, { beforeSet: () => { const gate = deferred(); gates.push(gate); return gate.promise; } });
-  const visible = [];
-  const controller = createPopupNotificationPreferences(storage.api, state => visible.push(state));
-  await controller.load();
-
-  const first = controller.update("notifyOnDecrease", false);
-  const second = controller.update("notifyOnIncrease", true);
-  assert.deepEqual(controller.getState().preferences, { version: 1, enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  await tick();
-  assert.equal(gates.length, 1);
-  gates[0].resolve();
-  await tick();
-  assert.equal(gates.length, 2);
-  gates[1].resolve();
-  assert.deepEqual(await Promise.all([first, second]), [true, true]);
-  assert.deepEqual(storage.data[NOTIFICATION_PREFERENCES_KEY], { version: 1, enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  assert.deepEqual(controller.getState().preferences, storage.data[NOTIFICATION_PREFERENCES_KEY]);
-  assert.equal(visible.at(-1).status, "saved");
-  controller.dispose();
-});
-
-test("failed writes roll back to committed preferences and show a safe failure state", async () => {
-  const storage = createStorage({}, { beforeSet: async () => { throw new Error("simulated quota/write failure"); } });
-  const controller = createPopupNotificationPreferences(storage.api, () => {});
-  await controller.load();
-  const result = await controller.update("notifyOnIncrease", true);
-  assert.equal(result, false);
-  assert.deepEqual(controller.getState().preferences, defaults());
-  assert.equal(controller.getState().status, "write-error");
-  assert.equal(controller.getState().errorCode, "NOTIFICATION_PREFERENCES_WRITE_FAILED");
-  assert.equal(storage.data[NOTIFICATION_PREFERENCES_KEY], undefined);
-  controller.dispose();
-});
-
-test("unsupported and malformed records fail closed without rewriting stored data", async () => {
-  const badRecords = [
-    { version: 9, enabled: true, notifyOnDecrease: true, notifyOnIncrease: true },
-    { version: 1, enabled: true, notifyOnDecrease: "yes", notifyOnIncrease: false },
-    { version: 1, enabled: true, notifyOnDecrease: true },
-    { version: 1, enabled: true, notifyOnDecrease: true, notifyOnIncrease: false, extra: true },
-    null
-  ];
-  for (const raw of badRecords) {
-    const storage = createStorage({ [NOTIFICATION_PREFERENCES_KEY]: raw });
-    const before = stored(storage.data[NOTIFICATION_PREFERENCES_KEY]);
-    const controller = createPopupNotificationPreferences(storage.api, () => {});
-    await controller.load();
-    assert.equal(controller.getState().valid, false);
-    assert.deepEqual(controller.getState().effective, { enabled: false, notifyOnDecrease: false, notifyOnIncrease: false });
-    assert.deepEqual(storage.data[NOTIFICATION_PREFERENCES_KEY], before);
-    assert.equal(storage.writes.length, 0);
-    controller.dispose();
-  }
-  assert.equal(normalizeNotificationPreferences({ version: 7 }).errorCode, "UNSUPPORTED_NOTIFICATION_PREFERENCES_VERSION");
-});
-
-test("late initialization reads cannot overwrite a newer local storage event", async () => {
-  const read = deferred();
-  const storage = createStorage({}, { get: () => read.promise });
-  const controller = createPopupNotificationPreferences(storage.api, () => {});
-  const initialLoad = controller.load();
-  storage.emit(NOTIFICATION_PREFERENCES_KEY, { version: 1, enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  read.resolve({ [NOTIFICATION_PREFERENCES_KEY]: defaults() });
-  assert.equal(await initialLoad, false);
-  assert.deepEqual(controller.getState().preferences, { version: 1, enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  controller.dispose();
-});
-
-test("local preference events update an open popup, while other keys and storage areas are ignored", async () => {
-  const storage = createStorage();
-  const states = [];
-  const controller = createPopupNotificationPreferences(storage.api, state => states.push(state));
-  await controller.load();
-  const count = states.length;
-  storage.emit("automaticChecks", { version: 1, enabled: false, intervalMinutes: 180 });
-  storage.emit(NOTIFICATION_PREFERENCES_KEY, { version: 1, enabled: false, notifyOnDecrease: true, notifyOnIncrease: true }, "sync");
-  assert.equal(states.length, count);
-  storage.emit(NOTIFICATION_PREFERENCES_KEY, { version: 1, enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  assert.deepEqual(controller.getState().effective, { enabled: true, notifyOnDecrease: false, notifyOnIncrease: true });
-  controller.dispose();
-});
-
-test("preferences remain independent and do not alter watchlist or automatic settings", async () => {
-  const initialWatchlist = { version: 1, products: { B0D47HCRZ6: { lastSuccessfulPriceTry: 1200, lastAttemptedCheckAt: "2026-10-22T10:00:00.000Z" } } };
-  const initialAuto = { version: 1, enabled: false, intervalMinutes: 180 };
-  const storage = createStorage({ watchlist: initialWatchlist, automaticChecks: initialAuto });
-  const controller = createPopupNotificationPreferences(storage.api, () => {});
-  await controller.load();
-  await controller.update("notifyOnIncrease", true);
-  assert.deepEqual(storage.data.watchlist, initialWatchlist);
-  assert.deepEqual(storage.data.automaticChecks, initialAuto);
-  assert.deepEqual(Object.keys(storage.data).sort(), ["automaticChecks", "notificationPreferences", "watchlist"]);
-  controller.dispose();
-});
-
-test("preference updates do not create notifications, fetch, alarms, or product checks", async () => {
-  const calls = { notification: 0, fetch: 0, alarm: 0, check: 0 };
-  const chromeMock = {
-    notifications: { create() { calls.notification++; } },
-    alarms: { create() { calls.alarm++; } },
-    runtime: { sendMessage() { calls.check++; } }
-  };
-  const previousChrome = globalThis.chrome;
-  const previousFetch = globalThis.fetch;
-  globalThis.chrome = chromeMock;
-  globalThis.fetch = () => { calls.fetch++; };
-  const storage = createStorage();
-  const controller = createPopupNotificationPreferences(storage.api, () => {});
-  try {
-    await controller.load();
-    await controller.update("notifyOnIncrease", true);
-    await controller.update("enabled", false);
-    assert.deepEqual(calls, { notification: 0, fetch: 0, alarm: 0, check: 0 });
-  } finally {
-    controller.dispose();
-    globalThis.chrome = previousChrome;
-    globalThis.fetch = previousFetch;
-  }
-});
-
-test("the preferences listener coexists with live watchlist updates and disposes cleanly", async () => {
-  const storage = createStorage();
-  const preferences = createPopupNotificationPreferences(storage.api, () => {});
-  const watchlistStates = [];
-  const watchlistSync = createPopupWatchlistSync(storage.api, value => watchlistStates.push(value));
-  await preferences.load();
-  storage.emit("watchlist", { version: 1, products: { B0D47HCRZ6: { title: "Live update" } } });
-  assert.equal(watchlistStates.length, 1);
-  assert.equal(preferences.getState().preferences.enabled, true);
-  preferences.dispose();
-  watchlistSync.dispose();
-  assert.equal(storage.listeners.size, 0);
-});
+•áÁ½ÉÐ½¹ÍÐ9=Q%%Q%=9}AII9M}-d€ô€‰¹½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ìˆì()•áÁ½ÉÐ½¹ÍÐU1Q}9=Q%%Q%=9}AII9L€ô=‰©•Ð¹™É••é”¡ì(€Ù•ÉÍ¥½¸è€Ä°(€•¹…‰±•èÑÉÕ”°(€¹½Ñ¥™å=¹•É•…Í”èÑÉÕ”°(€¹½Ñ¥™å=¹%¹É•…Í”è™…±Í”)ô¤ì()½¹ÍÐ%M	1}9=Q%%Q%=9}AII9L€ô=‰©•Ð¹™É••é”¡ì(€Ù•ÉÍ¥½¸è€Ä°(€•¹…‰±•è™…±Í”°(€¹½Ñ¥™å=¹•É•…Í”è™…±Í”°(€¹½Ñ¥™å=¹%¹É•…Í”è™…±Í”)ô¤ì()½¹ÍÐAII9}%1L€ô¹•ÜM•Ð¡l‰•¹…‰±•ˆ°€‰¹½Ñ¥™å=¹•É•…Í”ˆ°€‰¹½Ñ¥™å=¹%¹É•…Í”‰t¤ì()•áÁ½ÉÐ™Õ¹Ñ¥½¸¹½Éµ…±¥é•9½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ì¡Ù…±Õ”¤ì(€¥˜€¡Ù…±Õ”€ôôôÕ¹‘•™¥¹•¤ì(€€€É•ÑÕÉ¸ìÁÉ•™•É•¹•Ìèì€¸¸¹U1Q}9=Q%%Q%=9}AII9Lô°Ù…±¥èÑÉÕ”°¥Í•™…Õ±ÐèÑÉÕ”ôì(€ô(€¥˜€ …Ù…±Õ”ñðÑåÁ•½˜Ù…±Õ”€„ôô€‰½‰©•ÐˆñðÉÉ…ä¹¥ÍÉÉ…ä¡Ù…±Õ”¤¤ì(€€€É•ÑÕÉ¸ìÁÉ•™•É•¹•Ìèì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lô°Ù…±¥è™…±Í”°•ÉÉ½É½‘”è€‰51=I5}9=Q%%Q%=9}AII9Lˆôì(€ô((€½¹ÍÐ­•åÌ€ô=‰©•Ð¹­•åÌ¡Ù…±Õ”¤ì(€¥˜€¡Ù…±Õ”¹Ù•ÉÍ¥½¸€„ôô€Ä¤ì(€€€É•ÑÕÉ¸ìÁÉ•™•É•¹•Ìèì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lô°Ù…±¥è™…±Í”°•ÉÉ½É½‘”è€‰U9MUAA=IQ}9=Q%%Q%=9}AII9M}YIM%=8ˆôì(€ô(€¥˜€¡­•åÌ¹±•¹Ñ €„ôô€Ðñð€…­•åÌ¹¥¹±Õ‘•Ì ‰Ù•ÉÍ¥½¸ˆ¤ñð(€€€€€l¸¸¹AII9}%1Mt¹Í½µ”¡™¥•±€ôøÑåÁ•½˜Ù…±Õ•m™¥•±‘t€„ôô€‰‰½½±•…¸ˆ¤ñð(€€€€€­•åÌ¹Í½µ”¡­•ä€ôø­•ä€„ôô€‰Ù•ÉÍ¥½¸ˆ€˜˜€…AII9}%1L¹¡…Ì¡­•ä¤¤¤ì(€€€É•ÑÕÉ¸ìÁÉ•™•É•¹•Ìèì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lô°Ù…±¥è™…±Í”°•ÉÉ½É½‘”è€‰51=I5}9=Q%%Q%=9}AII9Lˆôì(€ô((€É•ÑÕÉ¸ì(€€€ÁÉ•™•É•¹•Ìèì(€€€€€Ù•ÉÍ¥½¸è€Ä°(€€€€€•¹…‰±•èÙ…±Õ”¹•¹…‰±•°(€€€€€¹½Ñ¥™å=¹•É•…Í”èÙ…±Õ”¹¹½Ñ¥™å=¹•É•…Í”°(€€€€€¹½Ñ¥™å=¹%¹É•…Í”èÙ…±Õ”¹¹½Ñ¥™å=¹%¹É•…Í”(€€€ô°(€€€Ù…±¥èÑÉÕ”°(€€€¥Í•™…Õ±Ðè™…±Í”(€ôì)ô()•áÁ½ÉÐ™Õ¹Ñ¥½¸•Ñ™™•Ñ¥Ù•9½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ì¡ÁÉ•™•É•¹•Ì¤ì(€½¹ÍÐ¹½Éµ…±¥é•€ô¹½Éµ…±¥é•9½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ì¡ÁÉ•™•É•¹•Ì¤ì(€½¹ÍÐÙ…±Õ”€ô¹½Éµ…±¥é•¹ÁÉ•™•É•¹•Ìì(€É•ÑÕÉ¸=‰©•Ð¹™É••é”¡ì(€€€•¹…‰±•è¹½Éµ…±¥é•¹Ù…±¥€˜˜Ù…±Õ”¹•¹…‰±•°(€€€¹½Ñ¥™å=¹•É•…Í”è¹½Éµ…±¥é•¹Ù…±¥€˜˜Ù…±Õ”¹•¹…‰±•€˜˜Ù…±Õ”¹¹½Ñ¥™å=¹•É•…Í”°(€€€¹½Ñ¥™å=¹%¹É•…Í”è¹½Éµ…±¥é•¹Ù…±¥€˜˜Ù…±Õ”¹•¹…‰±•€˜˜Ù…±Õ”¹¹½Ñ¥™å=¹%¹É•…Í”(€ô¤ì)ô()•áÁ½ÉÐ™Õ¹Ñ¥½¸É•…Ñ•A½ÁÕÁ9½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ì¡ÍÑ½É…”°½¹MÑ…Ñ”¤ì(€±•ÐÁÉ•™•É•¹•Ì€ôì€¸¸¹U1Q}9=Q%%Q%=9}AII9Lôì(€±•ÐÁ•ÉÍ¥ÍÑ•‘AÉ•™•É•¹•Ì€ôì€¸¸¹U1Q}9=Q%%Q%=9}AII9Lôì(€±•Ð±½…‘•€ô™…±Í”ì(€±•ÐÙ…±¥€ôÑÉÕ”ì(€±•Ð•ÉÉ½É½‘”€ô¹Õ±°ì(€±•ÐÍÑ…ÑÕÌ€ô€‰±½…‘¥¹œˆì(€±•Ð‘¥ÍÁ½Í•€ô™…±Í”ì(€±•ÐÉ•Ù¥Í¥½¸€ô€Àì(€±•ÐÁÉ•™•É•¹•Y•ÉÍ¥½¸€ô€Àì(€±•ÐÁ•¹‘¥¹]É¥Ñ•Ì€ô€Àì(€±•ÐÝÉ¥Ñ•EÕ•Õ”€ôAÉ½µ¥Í”¹É•Í½±Ù” ¤ì(€±•Ð¹••‘ÍMÑ½É…•I•…€ô™…±Í”ì((€™Õ¹Ñ¥½¸Í¹…ÁÍ¡½Ð ¤ì(€€€É•ÑÕÉ¸ì(€€€€€ÁÉ•™•É•¹•Ìèì€¸¸¹ÁÉ•™•É•¹•Ìô°(€€€€€•™™•Ñ¥Ù”è•Ñ™™•Ñ¥Ù•9½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ì¡ÁÉ•™•É•¹•Ì¤°(€€€€€±½…‘•°(€€€€€Ù…±¥°(€€€€€•ÉÉ½É½‘”°(€€€€€ÍÑ…ÑÕÌ(€€€ôì(€ô((€™Õ¹Ñ¥½¸ÁÕ‰±¥Í  ¤ì(€€€¥˜€ …‘¥ÍÁ½Í•¤½¹MÑ…Ñ”¡Í¹…ÁÍ¡½Ð ¤¤ì(€ô((€™Õ¹Ñ¥½¸…ÁÁ±å9½Éµ…±¥é•¡Ù…±Õ”°¹•ÝMÑ…ÑÕÌ€ô€‰É•…‘äˆ¤ì(€€€½¹ÍÐ¹½Éµ…±¥é•€ô¹½Éµ…±¥é•9½Ñ¥™¥…Ñ¥½¹AÉ•™•É•¹•Ì¡Ù…±Õ”¤ì(€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹¹½Éµ…±¥é•¹ÁÉ•™•É•¹•Ìôì(€€€Á•ÉÍ¥ÍÑ•‘AÉ•™•É•¹•Ì€ôì€¸¸¹¹½Éµ…±¥é•¹ÁÉ•™•É•¹•Ìôì(€€€Ù…±¥€ô¹½Éµ…±¥é•¹Ù…±¥ì(€€€•ÉÉ½É½‘”€ô¹½Éµ…±¥é•¹•ÉÉ½É½‘”ñð¹Õ±°ì(€€€ÍÑ…ÑÕÌ€ô¹½Éµ…±¥é•¹Ù…±¥€ü¹•ÝMÑ…ÑÕÌ€è€‰¥¹Ù…±¥ˆì(€€€±½…‘•€ôÑÉÕ”ì(€€€É•Ù¥Í¥½¸€¬ô€Äì(€€€ÁÕ‰±¥Í  ¤ì(€ô((€…Íå¹Œ™Õ¹Ñ¥½¸É•…‘1…Ñ•ÍÐ ¤ì(€€€½¹ÍÐÉ•…‘I•Ù¥Í¥½¸€ôÉ•Ù¥Í¥½¸ì(€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÍÑ½É…”¹±½…°¹•Ð¡9=Q%%Q%=9}AII9M}-d¤ì(€€€¥˜€¡‘¥ÍÁ½Í•ñðÉ•…‘I•Ù¥Í¥½¸€„ôôÉ•Ù¥Í¥½¸ñðÁ•¹‘¥¹]É¥Ñ•Ì€ø€À¤É•ÑÕÉ¸™…±Í”ì(€€€½¹ÍÐÉ…Ü€ôÉ•ÍÕ±Ðü¹m9=Q%%Q%=9}AII9M}-etì(€€€…ÁÁ±å9½Éµ…±¥é•¡É…Ü¤ì(€€€É•ÑÕÉ¸ÑÉÕ”ì(€ô((€™Õ¹Ñ¥½¸½¹¡…¹•¡¡…¹•Ì°…É•…9…µ”¤ì(€€€¥˜€¡‘¥ÍÁ½Í•ñð…É•…9…µ”€„ôô€‰±½…°ˆñð€…=‰©•Ð¹¡…Í=Ý¸¡¡…¹•Ì°9=Q%%Q%=9}AII9M}-d¤¤É•ÑÕÉ¸ì(€€€É•Ù¥Í¥½¸€¬ô€Äì(€€€¥˜€¡Á•¹‘¥¹]É¥Ñ•Ì€ø€À¤ì(€€€€€¹••‘ÍMÑ½É…•I•…€ôÑÉÕ”ì(€€€€€É•ÑÕÉ¸ì(€€€ô((€€€½¹ÍÐ•Ù•¹ÑI•Ù¥Í¥½¸€ôÉ•Ù¥Í¥½¸ì(€€€É•…‘1…Ñ•ÍÐ ¤¹…Ñ   ¤€ôøì(€€€€€¥˜€¡‘¥ÍÁ½Í•ñð•Ù•¹ÑI•Ù¥Í¥½¸€„ôôÉ•Ù¥Í¥½¸¤É•ÑÕÉ¸ì(€€€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lôì(€€€€€Á•ÉÍ¥ÍÑ•‘AÉ•™•É•¹•Ì€ôì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lôì(€€€€€±½…‘•€ôÑÉÕ”ì(€€€€€Ù…±¥€ô™…±Í”ì(€€€€€•ÉÉ½É½‘”€ô€‰9=Q%%Q%=9}AII9M}I}%1ˆì(€€€€€ÍÑ…ÑÕÌ€ô€‰É•…µ•ÉÉ½Èˆì(€€€€€É•Ù¥Í¥½¸€¬ô€Äì(€€€€€ÁÕ‰±¥Í  ¤ì(€€€ô¤ì(€ô((€ÍÑ½É…”¹½¹¡…¹•¹…‘‘1¥ÍÑ•¹•È¡½¹¡…¹•¤ì(€ÁÕ‰±¥Í  ¤ì((€…Íå¹Œ™Õ¹Ñ¥½¸±½… ¤ì(€€€½¹ÍÐ¥¹¥Ñ¥…±I•Ù¥Í¥½¸€ôÉ•Ù¥Í¥½¸ì(€€€ÑÉäì(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÍÑ½É…”¹±½…°¹•Ð¡9=Q%%Q%=9}AII9M}-d¤ì(€€€€€¥˜€¡‘¥ÍÁ½Í•ñð¥¹¥Ñ¥…±I•Ù¥Í¥½¸€„ôôÉ•Ù¥Í¥½¸¤É•ÑÕÉ¸™…±Í”ì(€€€€€…ÁÁ±å9½Éµ…±¥é•¡É•ÍÕ±Ðü¹m9=Q%%Q%=9}AII9M}-et¤ì(€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô…Ñ ì(€€€€€¥˜€¡‘¥ÍÁ½Í•ñð¥¹¥Ñ¥…±I•Ù¥Í¥½¸€„ôôÉ•Ù¥Í¥½¸¤É•ÑÕÉ¸™…±Í”ì(€€€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lôì(€€€€€Á•ÉÍ¥ÍÑ•‘AÉ•™•É•¹•Ì€ôì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lôì(€€€€€±½…‘•€ôÑÉÕ”ì(€€€€€Ù…±¥€ô™…±Í”ì(€€€€€•ÉÉ½É½‘”€ô€‰9=Q%%Q%=9}AII9M}I}%1ˆì(€€€€€ÍÑ…ÑÕÌ€ô€‰É•…µ•ÉÉ½Èˆì(€€€€€É•Ù¥Í¥½¸€¬ô€Äì(€€€€€ÁÕ‰±¥Í  ¤ì(€€€€€É•ÑÕÉ¸™…±Í”ì(€€€ô(€ô((€™Õ¹Ñ¥½¸ÕÁ‘…Ñ”¡™¥•±°Ù…±Õ”¤ì(€€€¥˜€¡‘¥ÍÁ½Í•ñð€…±½…‘•ñð€…AII9}%1L¹¡…Ì¡™¥•±¤ñðÑåÁ•½˜Ù…±Õ”€„ôô€‰‰½½±•…¸ˆ¤É•ÑÕÉ¸AÉ½µ¥Í”¹É•Í½±Ù”¡™…±Í”¤ì((€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹ÁÉ•™•É•¹•Ì°Ù•ÉÍ¥½¸è€Ä°m™¥•±‘tèÙ…±Õ”ôì(€€€Ù…±¥€ôÑÉÕ”ì(€€€•ÉÉ½É½‘”€ô¹Õ±°ì(€€€ÍÑ…ÑÕÌ€ô€‰Í…Ù¥¹œˆì(€€€É•Ù¥Í¥½¸€¬ô€Äì(€€€½¹ÍÐÑ¡¥ÍY•ÉÍ¥½¸€ô€¬­ÁÉ•™•É•¹•Y•ÉÍ¥½¸ì(€€€½¹ÍÐÉ•½É€ôì€¸¸¹ÁÉ•™•É•¹•Ìôì(€€€Á•¹‘¥¹]É¥Ñ•Ì€¬ô€Äì(€€€ÁÕ‰±¥Í  ¤ì((€€€½¹ÍÐÍ…Ù”€ô…Íå¹Œ€ ¤€ôøì(€€€€€ÑÉäì(€€€€€€€…Ý…¥ÐÍÑ½É…”¹±½…°¹Í•Ð¡ìm9=Q%%Q%=9}AII9M}-etèÉ•½Éô¤ì(€€€€€€€Á•ÉÍ¥ÍÑ•‘AÉ•™•É•¹•Ì€ôÉ•½Éì(€€€€€€€¥˜€¡Ñ¡¥ÍY•ÉÍ¥½¸€ôôôÁÉ•™•É•¹•Y•ÉÍ¥½¸€˜˜€…‘¥ÍÁ½Í•¤ì(€€€€€€€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹É•½Éôì(€€€€€€€€€Ù…±¥€ôÑÉÕ”ì(€€€€€€€€€•ÉÉ½É½‘”€ô¹Õ±°ì(€€€€€€€€€ÍÑ…ÑÕÌ€ô€‰Í…Ù•ˆì(€€€€€€€€€ÁÕ‰±¥Í  ¤ì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€€€ô…Ñ ì(€€€€€€€¥˜€¡Ñ¡¥ÍY•ÉÍ¥½¸€ôôôÁÉ•™•É•¹•Y•ÉÍ¥½¸€˜˜€…‘¥ÍÁ½Í•¤ì(€€€€€€€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹Á•ÉÍ¥ÍÑ•‘AÉ•™•É•¹•Ìôì(€€€€€€€€€Ù…±¥€ô™…±Í”ì(€€€€€€€€€•ÉÉ½É½‘”€ô€‰9=Q%%Q%=9}AII9M}]I%Q}%1ˆì(€€€€€€€€€ÍÑ…ÑÕÌ€ô€‰ÝÉ¥Ñ”µ•ÉÉ½Èˆì(€€€€€€€€€ÁÕ‰±¥Í  ¤ì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸™…±Í”ì(€€€€€ô™¥¹…±±äì(€€€€€€€Á•¹‘¥¹]É¥Ñ•Ì€´ô€Äì(€€€€€€€¥˜€¡Á•¹‘¥¹]É¥Ñ•Ì€ôôô€À€˜˜¹••‘ÍMÑ½É…•I•…€˜˜€…‘¥ÍÁ½Í•¤ì(€€€€€€€€€¹••‘ÍMÑ½É…•I•…€ô™…±Í”ì(€€€€€€€€€ÑÉäì…Ý…¥ÐÉ•…‘1…Ñ•ÍÐ ¤ìô…Ñ ì(€€€€€€€€€€€¥˜€ …‘¥ÍÁ½Í•¤ì(€€€€€€€€€€€€€•ÉÉ½É½‘”€ô€‰9=Q%%Q%=9}AII9M}I}%1ˆì(€€€€€€€€€€€€€ÍÑ…ÑÕÌ€ô€‰É•…µ•ÉÉ½Èˆì(€€€€€€€€€€€€€Ù…±¥€ô™…±Í”ì(€€€€€€€€€€€€€ÁÉ•™•É•¹•Ì€ôì€¸¸¹%M	1}9=Q%%Q%=9}AII9Lôì(€€€€€€€€€€€€€ÁÕ‰±¥Í  ¤ì(€€€€€€€€€€€ô(€€€€€€€€€ô(€€€€€€€ô(€€€€€ô(€€€ôì(€€€ÝÉ¥Ñ•EÕ•Õ”€ôÝÉ¥Ñ•EÕ•Õ”¹Ñ¡•¸¡Í…Ù”°Í…Ù”¤ì(€€€É•ÑÕÉ¸ÝÉ¥Ñ•EÕ•Õ”ì(€ô((€É•ÑÕÉ¸ì(€€€±½…°(€€€ÕÁ‘…Ñ”°(€€€•ÑMÑ…Ñ”èÍ¹…ÁÍ¡½Ð°(€€€‘¥ÍÁ½Í” ¤ì(€€€€€¥˜€¡‘¥ÍÁ½Í•¤É•ÑÕÉ¸ì(€€€€€‘¥ÍÁ½Í•€ôÑÉÕ”ì(€€€€€ÍÑ½É…”¹½¹¡…¹•¹É•µ½Ù•1¥ÍÑ•¹•È¡½¹¡…¹•¤ì(€€€ô(€ôì)ô(
