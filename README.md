@@ -52,6 +52,8 @@ Uygunluk, ürünün **son denenen** kontrolünden itibaren geçen gerçek üç s
 
 Chrome alarmı her seferinde en çok bir uygun ürünü kontrol eder; başka uygun ürün varsa sonraki denemeyi en az bir dakika sonrasına kurar. Bu tek seferlik alarm ve ara süresi yerel depoda tutulur. Çalışan yeniden başlarsa eksik alarm yeniden kurulur ve yarım kalan kontrol `CHECK_INTERRUPTED` olarak işaretlenir; son deneme zamanı korunur. Kaçırılan üç saatlik dönemler toplu halde tekrar oynatılmaz. Chrome kapalıyken kontrol yapılmaz; uyku, tarayıcı ve alarm gecikmeleri hedef zamanı ileri kaydırabilir.
 
+Popup açıkken `chrome.storage.local` içindeki izleme listesi değişirse görünen ürünler otomatik güncellenir. Bu yalnızca mevcut yerel veriyi yeniden sunar; polling veya ek Amazon isteği başlatmaz. Otomatik kontrollerin çalışması için popup'ın açık kalması gerekmez.
+
 Otomatik kontrol kapatıldığında yalnızca uzantının kendi alarmı temizlenir; başlamış bir istek tamamlanabilir, yeni otomatik istek başlatılmaz. Elle kontroller açık kalır. Amazon Türkiye site izni yoksa otomatik akış izin penceresi açmaz veya ağ isteği yapmaz; popup izin gereksinimini gösterir ve yeniden denemeyi sınırlar. Sık veya çok sayıda fiyat isteği Amazon tarafından kısıtlanabilir. Bildirimler, hedef fiyatlar ve geçmiş fiyat grafikleri henüz uygulanmadı.
 
 ## Desteklenen bağlantılar
@@ -191,3 +193,47 @@ Yukarıdaki tam iç içe satın alma bölgesi yapısı Chrome'da görüntülenen
 Gerçek tarayıcıda az sayıda istekle, önce geliştirici uzantısını yükleyin ve şu ürünleri tek tek inceleyin: `6052657669`, `6259174209`, `B0FZ9Y4GPF` ve `B0D47HCRZ6`. Mac Chrome'da PR #8 checkout'unda `npm run dev:prepare` çalıştırın, `chrome://extensions` sayfasında **FiyatNöbeti (Dev PR #8)** uzantısının yüklü olduğunu doğrulayın ve `.fiyatnobeti-dev` klasörünü **Paketlenmemiş öğe yükle (Load unpacked)** ile yükleyin. Gerekirse popup'tan iki kitap ASIN'ini ekleyin; sonra geliştirici uzantısının servis çalışanı **İncele (Inspect)** konsolunda her ASIN için `await globalThis.fiyatNobetiDev.diagnoseProduct("ASIN")` komutunu bir kez çalıştırın. `diagnostics.alternatives.apexPriceToPay.elements` içindeki `insidePrimaryContainer`, `ancestry`, `nearbyPriceRegion`, `insideExcludedContext` ve `fallback.rejectionReason` değerlerini kitaplar arasında karşılaştırın. Ayrıca her ürünün `parserOutcome` değerini, Amazon Türkiye'de seçili ürün/formatın görünen ana fiyatıyla ve ürün başlığıyla karşılaştırın. Fallback yalnızca birincil seçici aday bulamadığında kullanılmalıdır; birincil seçici başarılıysa fiyatı o sağlamalıdır. Bir kitabın farklı formatları varsa alternatif format fiyatı seçilmediğini doğrulayın. Önceden başarılı bir fiyatı olan üründe başarısız kontrol sonrasında bu fiyatın korunduğunu ve tanı sonucunun gerçek parser durumunu yansıttığını kontrol edin. Chrome veya Comet'te bu canlı kontroller henüz tamamlanmamıştır.
 
 Chrome'da elle test için `chrome://extensions` sayfasından uzantıyı yeniden yükleyin. Popup'ta otomatik kontrolün **Açık · 3 saatte bir** olduğunu doğrulayın; iki Amazon ürünü ekleyin ve ilk fiyat kontrollerini inceleyin. Popup'ı kapatıp açınca ayar ve ürünler kalmalıdır. Bir ürünü elle yenileyin; onun sonraki otomatik kontrolü son denemeden üç saat önce gerçekleşmemelidir. Otomatik kontrolü kapatın, elle yenilemeyi tekrar deneyin ve yeni otomatik kontrol olmadığını doğrulayın. Yeniden açıp Chrome çalışır durumdayken yeterli süre bekleyin; başarılı/başarısız otomatik denemenin zamanını ve eski başarılı fiyatın korunmasını inceleyin. Uzantının servis çalışanı DevTools penceresinde `chrome.alarms.get("fiyatnobeti:automatic-price-check")` ile alarmın varlığını, kapatınca silindiğini ve açınca geri geldiğini kontrol edebilirsiniz. Görünür Amazon sekmesi açılmamalıdır. Comet'te aynı akış, paketlenmemiş uzantı ve gerekli MV3 API'leri destekleniyorsa denenebilir. Otomatik kontrollerin gerçek Chrome/Comet davranışı henüz ayrıca doğrulanmamıştır.
+
+### Popup canlı güncelleme sunum testi
+
+Bu test üç saat beklemez ve Amazon isteği göndermez. Tercihen yalnızca bu test için oluşturulmuş, boş bir Chrome profili ve geliştirici paketi kullanın. `chrome://extensions` üzerinden geliştirici uzantısının servis çalışanı DevTools'unu açın. Popup'ı da açın; odak değişince popup kapanıyorsa popup içeriğine sağ tıklayıp **İncele (Inspect)** ile popup DevTools'unu ayrı pencereye alın ya da aynı uzantı popup URL'sini yalıtılmış profilde ayrı sekmede açın.
+
+Servis çalışanı konsolunda önce mevcut watchlist'i yedekleyin, sonra açık popup için belirgin şekilde sentetik bir kayıt yazın:
+
+```javascript
+const popupSmokeBefore = await chrome.storage.local.get("watchlist");
+await chrome.storage.local.set({
+  watchlist: {
+    version: 1,
+    products: {
+      TEST000001: {
+        asin: "TEST000001",
+        canonicalUrl: "https://www.amazon.com.tr/dp/TEST000001",
+        title: "SYNTHETIC POPUP TEST — gerçek Amazon ürünü değildir",
+        lastSuccessfulPriceTry: 123.45,
+        lastSuccessfulCheckAt: new Date().toISOString(),
+        lastAttemptedCheckAt: new Date().toISOString(),
+        lastCheckStatus: "success",
+        lastErrorCode: null,
+        addedAt: new Date().toISOString()
+      }
+    }
+  },
+  popupSmokeBackup: {
+    hadWatchlist: Object.hasOwn(popupSmokeBefore, "watchlist"),
+    watchlist: popupSmokeBefore.watchlist
+  }
+});
+```
+
+Açık popup'ta sentetik başlık ve `₺123,45` görünmelidir. Fiyatın gerçek gözlem olmadığını unutmayın; bu kayıt üzerinde **Fiyatı kontrol et** düğmesine basmayın. Testi bitirince aynı konsolda watchlist'i geri yükleyin (boş profilde önceki değer yoksa anahtarı kaldırın):
+
+```javascript
+const { popupSmokeBackup } = await chrome.storage.local.get("popupSmokeBackup");
+if (popupSmokeBackup?.hadWatchlist) {
+  await chrome.storage.local.set({ watchlist: popupSmokeBackup.watchlist });
+} else {
+  await chrome.storage.local.remove("watchlist");
+}
+await chrome.storage.local.remove("popupSmokeBackup");
+```
