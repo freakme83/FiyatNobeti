@@ -3,6 +3,7 @@ import { errorMessage, renderProductRows } from "./src/watchlist-view.js";
 import { createPermissionOnboarding } from "./src/permission-onboarding.js";
 import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
+import { createPopupNotificationPreferences } from "./src/notification-preferences.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
@@ -20,6 +21,11 @@ const emptyState = document.querySelector("#empty-state");
 const autoEnabled = document.querySelector("#auto-enabled");
 const autoMode = document.querySelector("#auto-mode");
 const autoStatus = document.querySelector("#auto-status");
+const notificationMaster = document.querySelector("#notifications-enabled");
+const notifyOnDecrease = document.querySelector("#notify-on-decrease");
+const notifyOnIncrease = document.querySelector("#notify-on-increase");
+const notificationOptions = document.querySelector("#notification-options");
+const notificationStatus = document.querySelector("#notification-status");
 
 let watchlist = { version: 1, products: {} };
 const busyAsins = new Set();
@@ -28,7 +34,36 @@ const watchlistSync = createPopupWatchlistSync(chrome.storage, updatedWatchlist 
   watchlist = updatedWatchlist;
   render();
 });
-window.addEventListener("unload", () => watchlistSync.dispose(), { once: true });
+const notificationPreferences = createPopupNotificationPreferences(chrome.storage, view => {
+  notificationMaster.checked = view.preferences.enabled;
+  notifyOnDecrease.checked = view.preferences.notifyOnDecrease;
+  notifyOnIncrease.checked = view.preferences.notifyOnIncrease;
+  notificationMaster.disabled = !view.loaded;
+  notifyOnDecrease.disabled = !view.loaded || !view.preferences.enabled;
+  notifyOnIncrease.disabled = !view.loaded || !view.preferences.enabled;
+  notificationOptions.dataset.disabled = String(!view.preferences.enabled);
+  notificationStatus.textContent = view.status === "loading" ? "Yükleniyor…"
+    : view.status === "saving" ? "Kaydediliyor…"
+    : view.status === "saved" ? "Bildirim tercihleri kaydedildi."
+    : view.status === "invalid" ? "Ayarlar geçersiz; güvenli olması için bildirimler kapalı."
+    : view.status === "read-error" ? "Ayarlar okunamadı; bildirimler kapalı."
+    : view.status === "write-error" ? "Kaydedilemedi; önceki ayarlar korundu."
+    : "";
+});
+window.addEventListener("unload", () => {
+  watchlistSync.dispose();
+  notificationPreferences.dispose();
+}, { once: true });
+
+notificationMaster.addEventListener("change", () => {
+  notificationPreferences.update("enabled", notificationMaster.checked);
+});
+notifyOnDecrease.addEventListener("change", () => {
+  notificationPreferences.update("notifyOnDecrease", notifyOnDecrease.checked);
+});
+notifyOnIncrease.addEventListener("change", () => {
+  notificationPreferences.update("notifyOnIncrease", notifyOnIncrease.checked);
+});
 
 async function loadAutoSettings() {
   const result = await chrome.runtime.sendMessage({ type: "GET_AUTO_SETTINGS" });
@@ -191,3 +226,4 @@ const permissionOnboarding = createPermissionOnboarding({
 });
 
 permissionOnboarding.start();
+notificationPreferences.load();

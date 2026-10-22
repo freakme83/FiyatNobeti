@@ -11,6 +11,14 @@ h1 { margin: 0; font-size: 20px; }
 .auto-control input:disabled { cursor: wait; }
 .auto-note, .auto-status { margin: 2px 0 8px; color: #53606c; font-size: 11px; line-height: 1.4; }
 .auto-status:empty { display: none; }
+#notification-settings { border-top: 1px solid #e0e6ea; margin: 8px 0 10px; padding-top: 8px; }
+.notification-master { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 3px; font-weight: 650; }
+.notification-option { display: flex; align-items: center; gap: 7px; margin: 2px 0; font-size: 12px; font-weight: 400; cursor: pointer; }
+input[type="checkbox"] { width: 16px; height: 16px; flex: none; margin: 0; padding: 0; accent-color: #146397; cursor: pointer; }
+input[type="checkbox"]:disabled { cursor: default; }
+#notification-options[data-disabled="true"] { opacity: .55; }
+.notification-status { margin: 3px 0 0; color: #53606c; font-size: 11px; line-height: 1.35; }
+.notification-status:empty { display: none; }
 label { display: block; font-weight: 650; margin-bottom: 5px; }
 input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #a5b1bb; border-radius: 6px; font: inherit; }
 input:focus-visible, button:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }

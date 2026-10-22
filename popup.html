@@ -28,6 +28,23 @@
         </div>
         <p id="auto-note" class="auto-note">Chrome çalışırken kontrol edilir; tarayıcı geciktirebilir. Chrome kapalıyken kontrol yapılmaz.</p>
         <p id="auto-status" class="auto-status" role="status" aria-live="polite"></p>
+        <section id="notification-settings" aria-label="Bildirim tercihleri">
+          <label class="notification-master" for="notifications-enabled">
+            <span>Bildirimler</span>
+            <input id="notifications-enabled" type="checkbox" checked disabled>
+          </label>
+          <div id="notification-options" data-disabled="true">
+            <label class="notification-option" for="notify-on-decrease">
+              <input id="notify-on-decrease" type="checkbox" checked disabled>
+              <span>Fiyat düştüğünde haber ver</span>
+            </label>
+            <label class="notification-option" for="notify-on-increase">
+              <input id="notify-on-increase" type="checkbox" disabled>
+              <span>Fiyat yükseldiğinde haber ver</span>
+            </label>
+          </div>
+          <p id="notification-status" class="notification-status" role="status" aria-live="polite">Yükleniyor…</p>
+        </section>
         <form id="add-form">
           <label for="product-url">Amazon ürün bağlantısı veya ASIN</label>
           <input id="product-url" type="text" required spellcheck="false"

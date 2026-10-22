@@ -22,13 +22,19 @@ The standard package is also available as the `fiyatnobeti-standard` artifact. C
 
 ## Developer-only synthetic notification test
 
-Download the `fiyatnobeti-developer` artifact from a successful **Build extension test packages** Actions run for this PR branch. If no run exists, use **Actions → Build extension test packages → Run workflow**, select `feat/notification-infrastructure` in the branch selector, and start the workflow. Extract the wrapper ZIP and its `fiyatnobeti-developer.zip`; load the extracted folder containing `manifest.json` at `chrome://extensions`. On the FiyatNöbeti developer extension, open **Service Worker → Inspect** and run:
+Download the `fiyatnobeti-developer` artifact from a successful **Build extension test packages** Actions run for this PR branch. If no run exists, use **Actions → Build extension test packages → Run workflow**, select `feat/notification-preferences` in the branch selector, and start the workflow. Extract the wrapper ZIP and its `fiyatnobeti-developer.zip`; load the extracted folder containing `manifest.json` at `chrome://extensions`. On the FiyatNöbeti developer extension, open **Service Worker → Inspect** and run:
 
 ```js
 await globalThis.fiyatNobetiDev.testPriceDropNotification()
 ```
 
 This explicit command creates one notification for the fixed `SYNTHETIC NOTIFICATION TEST` fixture (₺1.000,00 → ₺800,00, −₺200,00, %20). It does not add a product, change watchlist or price data, schedule alarms, fetch a URL, or run automatically. The command is absent from the standard extension. The `notifications` permission is required. A `created` result and returned Chrome notification ID confirm that Chrome accepted creation; operating-system notification settings, focus modes, and platform behavior can still suppress a desktop banner. If no banner appears, inspect notification permission in Chrome and check operating-system notification and focus settings. This is presentation-only infrastructure: real product checks do not trigger notifications.
+
+## Bildirim tercihleri
+
+Popup'taki **Bildirimler** ana anahtarı varsayılan olarak açıktır; **Fiyat düştüğünde haber ver** de varsayılan olarak açıktır, **Fiyat yükseldiğinde haber ver** kapalıdır. Fiyat yönü seçimleri birbirinden bağımsızdır. Ana anahtarı kapatmak bu seçimleri silmez; iki türü de etkisiz kılar, yeniden açınca önceki seçimler geri gelir. Tercihler popup kapatılıp açıldığında ve uzantı yeniden yüklendiğinde `chrome.storage.local` içinde korunur.
+
+Bu anahtarlar FiyatNöbeti içindeki kullanıcı tercihidir; Chrome/macOS bildirim iznini değiştirmez veya istemez. İşletim sistemi bildirimleri bastırabilir. Bu PR'da gerçek fiyat kontrolleri otomatik bildirim oluşturmaz; fiyat değişimlerine göre bildirim göndermek ayrıca kararlaştırılıp uygulanacaktır. Geliştirici paketindeki yukarıdaki sentetik bildirim denemesi mevcut kalır ve bu tercihleri değiştirmez.
 
 ## Yerel izleme listesi
 
