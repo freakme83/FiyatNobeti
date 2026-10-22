@@ -13,7 +13,7 @@ function toCents(value) {
   return cents;
 }
 
-export function calculatePriceDrop(event) {
+export function calculatePriceChange(event) {
   if (!event || typeof event !== "object" || Array.isArray(event)) return null;
   const product = event.product;
   if (!product || typeof product !== "object" || Array.isArray(product)) return null;
@@ -34,41 +34,58 @@ export function calculatePriceDrop(event) {
 
   const previousCents = toCents(event.previousPrice);
   const newCents = toCents(event.newPrice);
-  if (previousCents === null || newCents === null || newCents >= previousCents) return null;
+  if (previousCents === null || newCents === null || newCents === previousCents) return null;
 
-  const absoluteDecreaseCents = previousCents - newCents;
-  const percentBasisPoints = Math.round((absoluteDecreaseCents * 10_000) / previousCents);
+  const direction = newCents < previousCents ? "decrease" : "increase";
+  const absoluteDifferenceCents = Math.abs(previousCents - newCents);
+  const percentBasisPoints = Math.round((absoluteDifferenceCents * 10_000) / previousCents);
   const money = tryFormatter("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const percent = tryFormatter("tr-TR", { maximumFractionDigits: 2, minimumFractionDigits: 0 });
 
   return Object.freeze({
     asin: product.asin,
     title: product.title.trim(),
+    direction,
     previousCents,
     newCents,
-    absoluteDecreaseCents,
+    absoluteDifferenceCents,
     percentage: percentBasisPoints / 100,
     previousPriceText: money.format(previousCents / 100),
     newPriceText: money.format(newCents / 100),
-    absoluteDecreaseText: money.format(absoluteDecreaseCents / 100),
+    absoluteDifferenceText: money.format(absoluteDifferenceCents / 100),
     percentageText: `%${percent.format(percentBasisPoints / 100)}`
   });
 }
 
-export function buildPriceDropNotification(event) {
-  const drop = calculatePriceDrop(event);
-  if (!drop) return null;
-  return Object.freeze({
-    type: "basic",
-    title: drop.title,
-    message: `Yeni: ${drop.newPriceText} · Önceki: ${drop.previousPriceText} · −${drop.absoluteDecreaseText} (${drop.percentageText})`,
-    contextMessage: "Fiyat düşüşü"
+export function calculatePriceDrop(event) {
+  const change = calculatePriceChange(event);
+  if (change?.direction !== "decrease") return null;
+  return Object.freeze({ ...change,
+    absoluteDecreaseCents: change.absoluteDifferenceCents,
+    absoluteDecreaseText: change.absoluteDifferenceText
   });
 }
 
-export async function presentPriceDropNotification({ chromeApi, event }) {
-  const notification = buildPriceDropNotification(event);
-  if (!notification) return { status: "rejected", errorCode: "INVALID_PRICE_DROP_EVENT" };
+function notificationFor(change) {
+  return Object.freeze({
+    type: "basic",
+    title: change.title,
+    message: `Yeni: ${change.newPriceText} · Önceki: ${change.previousPriceText} · ${change.direction === "decrease" ? "−" : "+"}${change.absoluteDifferenceText} (${change.percentageText})`,
+    contextMessage: change.direction === "decrease" ? "Fiyat düşüşü" : "Fiyat yükselişi"
+  });
+}
+
+export function buildPriceChangeNotification(event) {
+  const change = calculatePriceChange(event);
+  return change ? notificationFor(change) : null;
+}
+
+export function buildPriceDropNotification(event) {
+  const drop = calculatePriceDrop(event);
+  return drop ? notificationFor(drop) : null;
+}
+
+async function presentNotification(chromeApi, notification) {
   const api = chromeApi?.notifications;
   if (typeof api?.getPermissionLevel !== "function" || typeof api?.create !== "function" ||
       typeof chromeApi?.runtime?.getURL !== "function") {
@@ -90,4 +107,16 @@ export async function presentPriceDropNotification({ chromeApi, event }) {
   } catch {
     return { status: "failed", errorCode: "NOTIFICATION_CREATE_FAILED" };
   }
+}
+
+export function presentPriceChangeNotification({ chromeApi, event }) {
+  const notification = buildPriceChangeNotification(event);
+  if (!notification) return Promise.resolve({ status: "rejected", errorCode: "INVALID_PRICE_CHANGE_EVENT" });
+  return presentNotification(chromeApi, notification);
+}
+
+export function presentPriceDropNotification({ chromeApi, event }) {
+  const notification = buildPriceDropNotification(event);
+  if (!notification) return Promise.resolve({ status: "rejected", errorCode: "INVALID_PRICE_DROP_EVENT" });
+  return presentNotification(chromeApi, notification);
 }

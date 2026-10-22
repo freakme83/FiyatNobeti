@@ -25,9 +25,16 @@ let startupListener;
 const alarms = new Map();
 const alarmCreations = [];
 let notificationCreations = 0;
+const notificationOptions = [];
+let notificationPermission = "granted";
+let notificationFailure = false;
+let preferenceReadFailure = false;
+let markerWriteFailure = false;
+let fetchCount = 0;
 globalThis.chrome = {
   runtime: {
     id: "test-extension",
+    getURL: path => `chrome-extension://test-extension/${path}`,
     onMessage: { addListener(fn) { listener = fn; } },
     onInstalled: { addListener(fn) { installedListener = fn; } },
     onStartup: { addListener(fn) { startupListener = fn; } },
@@ -58,14 +65,27 @@ globalThis.chrome = {
   storage: { local: {
     async get(keys) {
       const requested = Array.isArray(keys) ? keys : [keys];
+      if (preferenceReadFailure && requested.includes("notificationPreferences")) throw new Error("simulated preference read failure");
       return Object.fromEntries(requested.map(key => [key, stored[key]]));
     },
-    async set(value) { Object.assign(stored, value); }
+    async set(value) {
+      if (markerWriteFailure && Object.hasOwn(value, "automaticNotificationMarkers")) throw new Error("simulated marker write failure");
+      Object.assign(stored, value);
+    }
   } },
-  notifications: { async create() { notificationCreations++; return "unexpected-production-notification"; } }
+  notifications: {
+    async getPermissionLevel() { return notificationPermission; },
+    async create(options) {
+      notificationCreations++;
+      notificationOptions.push(options);
+      if (notificationFailure) throw new Error("simulated notification failure");
+      return `notification-${notificationCreations}`;
+    }
+  }
 };
 const deniedOrigins = new Set();
 globalThis.fetch = async (url, options) => {
+  fetchCount++;
   fetched = { url, options };
   if (fetchHandler) return fetchHandler(url, options);
   return fetchResult;
@@ -124,6 +144,15 @@ const resetWatchlist = async () => {
   alarmCreations.length = 0;
   fetchHandler = async () => htmlResponse();
   parseHandler = null;
+  delete stored.notificationPreferences;
+  delete stored.automaticNotificationMarkers;
+  notificationCreations = 0;
+  notificationOptions.length = 0;
+  notificationPermission = "granted";
+  notificationFailure = false;
+  preferenceReadFailure = false;
+  markerWriteFailure = false;
+  fetchCount = 0;
   permission = true;
   deniedOrigins.clear();
 };
@@ -151,6 +180,14 @@ function seedProduct(asin, { attemptedAt = null, addedAt = "2026-10-20T00:00:00.
   product.lastAttemptedCheckAt = attemptedAt;
   product.lastCheckStatus = status;
   stored.watchlist.products[asin] = product;
+  return product;
+}
+
+function seedSuccessfulProduct(asin = "B0D47HCRZ6") {
+  const product = seedProduct(asin, { attemptedAt: "2026-10-22T06:00:00.000Z", status: "success" });
+  product.title = "Test product";
+  product.lastSuccessfulPriceTry = 1000;
+  product.lastSuccessfulCheckAt = product.lastAttemptedCheckAt;
   return product;
 }
 
@@ -772,6 +809,158 @@ test("ordinary successful and failed automatic checks do not create notification
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "failure");
     assert.equal(notificationCreations, 0);
   });
+});
+
+test("production alarms notify once for enabled directions, with three-hour scheduling and no extra fetch", async () => {
+  useProductionBackground();
+  await withClock("2026-10-22T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedSuccessfulProduct();
+    let price = 800;
+    parseHandler = async () => ({ status: "success", priceTry: price, title: "Test product" });
+    await installedListener();
+    advanceToAlarm(clock);
+    const firstAlarm = { ...alarms.get(AUTO_ALARM_NAME) };
+    await fireAutomaticAlarm();
+    assert.equal(notificationOptions.length, 1);
+    assert.equal(notificationOptions[0].contextMessage, "Fiyat düşüşü");
+    assert.equal(notificationOptions[0].message, "Yeni: ₺800,00 · Önceki: ₺1.000,00 · −₺200,00 (%20)");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    assert.equal(fetchCount, 1);
+    await alarmListener(firstAlarm); // A stale duplicate delivery cannot repeat the event.
+    assert.equal(notificationOptions.length, 1);
+    assert.equal(fetchCount, 1);
+
+    price = 860;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(notificationOptions.length, 1); // Increase is OFF by default.
+    stored.notificationPreferences = { version: 1, enabled: true, notifyOnDecrease: true, notifyOnIncrease: true };
+    price = 900;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(notificationOptions.length, 2);
+    assert.equal(notificationOptions[1].contextMessage, "Fiyat yükselişi");
+    assert.equal(notificationOptions[1].message, "Yeni: ₺900,00 · Önceki: ₺860,00 · +₺40,00 (%4,65)");
+
+    stored.notificationPreferences.enabled = false;
+    price = 850;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(notificationOptions.length, 2);
+    assert.equal(fetchCount, 4);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("failure, unchanged recovery, manual refresh, addition and diagnostics do not notify", async () => {
+  useProductionBackground();
+  await withClock("2026-10-22T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedSuccessfulProduct();
+    await installedListener();
+    fetchHandler = async () => new Response("Unavailable", { status: 503, headers: { "content-type": "text/html" } });
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 1000);
+    assert.equal(notificationCreations, 0);
+
+    fetchHandler = async () => htmlResponse("B0D47HCRZ6");
+    let price = 1000;
+    parseHandler = async () => ({ status: "success", priceTry: price, title: "Test product" });
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(notificationCreations, 0);
+    price = 800;
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(notificationCreations, 1);
+
+    price = 700;
+    await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+    assert.equal(notificationCreations, 1);
+    await message("ADD_PRODUCT", { url: productUrl("B0CQXKXBR7") });
+    assert.equal(notificationCreations, 1);
+    setDeveloperEventRecorderForDev(() => {});
+    try {
+      await diagnoseProductForDev("B0D47HCRZ6");
+      assert.equal(notificationCreations, 1);
+      await runOneAutomaticCheckForDev();
+      assert.equal(notificationCreations, 1);
+    } finally { setDeveloperEventRecorderForDev(); }
+  });
+});
+
+test("preferences changed while the fetch is pending are checked after the successful commit", async () => {
+  useProductionBackground();
+  await withClock("2026-10-22T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedSuccessfulProduct();
+    const parsed = deferred();
+    const started = deferred();
+    fetchHandler = async () => { started.resolve(); return htmlResponse(); };
+    parseHandler = () => parsed.promise;
+    await installedListener();
+    advanceToAlarm(clock);
+    const delivery = fireAutomaticAlarm();
+    await started.promise;
+    stored.notificationPreferences = { version: 1, enabled: false, notifyOnDecrease: true, notifyOnIncrease: true };
+    parsed.resolve({ status: "success", priceTry: 800, title: "Test product" });
+    await delivery;
+    assert.equal(notificationCreations, 0);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 800);
+  });
+});
+
+test("removal and replacement during a pending automatic check cannot notify", async () => {
+  useProductionBackground();
+  for (const replace of [false, true]) {
+    await withClock("2026-10-22T12:00:00.000Z", async clock => {
+      await resetWatchlist();
+      seedSuccessfulProduct();
+      const parsed = deferred();
+      const started = deferred();
+      fetchHandler = async () => { started.resolve(); return htmlResponse(); };
+      parseHandler = () => parsed.promise;
+      await installedListener();
+      advanceToAlarm(clock);
+      const delivery = fireAutomaticAlarm();
+      await started.promise;
+      await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
+      if (replace) seedSuccessfulProduct();
+      parsed.resolve({ status: "success", priceTry: 800, title: "Test product" });
+      await delivery;
+      assert.equal(notificationCreations, 0);
+      assert.equal(fetchCount, 1);
+      if (replace) assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 1000);
+    });
+  }
+});
+
+test("denial, API errors, marker errors and unreadable preferences never corrupt successful checks", async () => {
+  useProductionBackground();
+  for (const mode of ["denied", "api", "marker", "read"]) {
+    await withClock("2026-10-22T12:00:00.000Z", async clock => {
+      await resetWatchlist();
+      seedSuccessfulProduct();
+      parseHandler = async () => ({ status: "success", priceTry: 800, title: "Test product" });
+      if (mode === "denied") notificationPermission = "denied";
+      if (mode === "api") notificationFailure = true;
+      if (mode === "marker") markerWriteFailure = true;
+      if (mode === "read") preferenceReadFailure = true;
+      await installedListener();
+      advanceToAlarm(clock);
+      await fireAutomaticAlarm();
+      const product = stored.watchlist.products.B0D47HCRZ6;
+      assert.equal(product.lastCheckStatus, "success", mode);
+      assert.equal(product.lastSuccessfulPriceTry, 800, mode);
+      assert.equal(product.lastAttemptedCheckAt, new Date(clock.now).toISOString(), mode);
+      assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS, mode);
+      assert.equal(fetchCount, 1, mode);
+      if (mode === "denied" || mode === "read" || mode === "marker") assert.equal(notificationCreations, 0, mode);
+      else assert.equal(notificationCreations, 1, mode);
+    });
+  }
 });
 
 test("overdue products run one per alarm with durable pacing and no overlapping auto fetches", async () => {
