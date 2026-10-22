@@ -18,7 +18,7 @@ async function makeColdWorker({ now, products, scheduledAt, blockedStartup = fal
   const alarmCreations = [];
   const storage = seedStorage || {
     [WATCHLIST_KEY]: { version: 1, products: Object.fromEntries(products.map(product => [product.asin, product])) },
-    automaticChecks: { version: 1, enabled: true, intervalMinutes: 360 },
+    automaticChecks: { version: 1, enabled: true, intervalMinutes: 180 },
     automaticCheckState: {
       version: 1, nextRunAt: new Date(scheduledAt).toISOString(), notBefore: null,
       unknownSince: {}, lastErrorCode: null
@@ -109,6 +109,28 @@ test("cold alarm activation preserves the consumed delivery through startup reco
     assert.equal(worker.requests, 1);
     assert.equal(worker.storage[WATCHLIST_KEY].products.B0D47HCRZ6.lastCheckStatus, "success");
     assert.equal(worker.storage[WATCHLIST_KEY].products.B0D47HCRZ6.lastSuccessfulPriceTry, 1234);
+  } finally { worker.restoreDate(); }
+});
+
+test("a consumed legacy six-hour alarm remains valid during cold-worker migration", async () => {
+  const now = Date.parse("2026-10-22T12:00:00.000Z");
+  const item = product("B0D47HCRZ6", new Date(now - 6 * 60 * 60 * 1000).toISOString());
+  const storage = {
+    [WATCHLIST_KEY]: { version: 1, products: { [item.asin]: item } },
+    automaticChecks: { version: 1, enabled: true, intervalMinutes: 360 },
+    automaticCheckState: {
+      version: 1, nextRunAt: new Date(now).toISOString(), notBefore: null,
+      unknownSince: {}, lastErrorCode: null
+    }
+  };
+  const worker = await makeColdWorker({ now, products: [item], scheduledAt: now, blockedStartup: true, seedStorage: storage });
+  try {
+    const delivery = worker.alarmListener()({ name: AUTO_ALARM_NAME, scheduledTime: now });
+    worker.releaseStartup();
+    await delivery;
+    assert.equal(worker.requests, 1);
+    assert.equal(storage.automaticChecks.intervalMinutes, 180);
+    assert.equal(worker.alarms.get(AUTO_ALARM_NAME).scheduledTime, now + AUTO_INTERVAL_MS);
   } finally { worker.restoreDate(); }
 });
 

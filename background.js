@@ -10,7 +10,7 @@ import {
 import {
   AUTO_ALARM_NAME, AUTO_INTERVAL_MS, AUTO_PACE_MS, AUTO_SETTINGS_KEY, AUTO_STATE_KEY,
   defaultAutoState, defaultAutoSettings, nextEligibleAt, normalizeAutoSettings,
-  normalizeAutoState, timestampMs
+  normalizeAutoState, timestampMs, migrateLegacyAutoState
 } from "./src/automatic.js";
 
 const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
@@ -407,8 +407,14 @@ async function recoverInterruptedChecks() {
 
 async function readAutoSettings() {
   const stored = await chrome.storage.local.get(AUTO_SETTINGS_KEY);
-  const settings = normalizeAutoSettings(stored[AUTO_SETTINGS_KEY]);
-  if (stored[AUTO_SETTINGS_KEY] === undefined) await chrome.storage.local.set({ [AUTO_SETTINGS_KEY]: settings });
+  const original = stored[AUTO_SETTINGS_KEY];
+  const settings = normalizeAutoSettings(original);
+  if (original?.intervalMinutes === 360) {
+    const state = migrateLegacyAutoState(await readAutoState(), Date.now());
+    // Migrate once, then let reconciliation replace any obsolete six-hour alarm.
+    await chrome.storage.local.set({ [AUTO_SETTINGS_KEY]: settings, [AUTO_STATE_KEY]: state });
+  }
+  if (original === undefined) await chrome.storage.local.set({ [AUTO_SETTINGS_KEY]: settings });
   return settings;
 }
 
