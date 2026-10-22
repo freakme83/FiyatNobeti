@@ -315,6 +315,31 @@ test("adds a new product, runs an initial check, and persists the versioned watc
   assert.deepEqual((await message("GET_WATCHLIST")).watchlist, stored.watchlist);
 });
 
+test("direct ASIN input uses the existing add flow and deduplicates against its canonical URL", async () => {
+  await resetWatchlist();
+  let requests = 0;
+  fetchHandler = async (url, options) => {
+    requests++;
+    assert.equal(url, productUrl("B0CKXJBQ6L"));
+    return htmlResponse("B0CKXJBQ6L");
+  };
+  parseHandler = async () => ({ status: "success", priceTry: 2999, title: "SoundPEATS" });
+  const added = await message("ADD_PRODUCT", { url: " b0ckxjbq6l " });
+  assert.equal(added.status, "added");
+  assert.equal(added.asin, "B0CKXJBQ6L");
+  assert.equal(added.watchlist.products.B0CKXJBQ6L.canonicalUrl, productUrl("B0CKXJBQ6L"));
+  assert.equal(requests, 1);
+
+  const duplicate = await message("ADD_PRODUCT", { url: productUrl("B0CKXJBQ6L") });
+  assert.equal(duplicate.status, "duplicate");
+  assert.equal(requests, 1);
+
+  const invalid = await message("ADD_PRODUCT", { url: "product B0CKXJBQ6L" });
+  assert.equal(invalid.status, "failure");
+  assert.equal(requests, 1);
+  assert.equal(Object.keys(stored.watchlist.products).length, 1);
+});
+
 test("adds a product from an existing amzn.eu short-link flow", async () => {
   await resetWatchlist();
   const calls = [];

@@ -8,6 +8,7 @@ const AMAZON_MARKETPLACES = new Set([
 ]);
 const ASIN = /^[A-Z0-9]{10}$/i;
 const REFERRAL_SEGMENT = /^ref=[A-Z0-9._~-]+$/i;
+const REFERRAL_ID_SEGMENT = /^\d{3}-\d{7}-\d{7}$/;
 const SLUG = /^[\p{L}\p{N}][\p{L}\p{N}._~-]*$/u;
 const SHORT_CODE = /^[A-Z0-9_-]{6,32}$/i;
 
@@ -31,14 +32,17 @@ function assertSecureAmazonDestination(url) {
 }
 
 function validateReferralTail(segments) {
-  return segments.every(segment => {
+  return segments.every((segment, index) => {
     let decoded;
     try {
       decoded = decodeURIComponent(segment);
     } catch {
       return false;
     }
-    return REFERRAL_SEGMENT.test(decoded);
+    if (REFERRAL_SEGMENT.test(decoded)) return true;
+    return index === segments.length - 1 && index > 0 &&
+      REFERRAL_SEGMENT.test(decodeURIComponent(segments[index - 1])) &&
+      REFERRAL_ID_SEGMENT.test(decoded);
   });
 }
 
@@ -79,7 +83,13 @@ export function normalizeAmazonUrl(input) {
 }
 
 export function parseAmazonInput(input) {
-  const url = parseUrl(input);
+  if (typeof input !== "string" || !input.trim()) throw new Error("INVALID_URL");
+  const trimmed = input.trim();
+  if (ASIN.test(trimmed)) {
+    const asin = trimmed.toUpperCase();
+    return { type: "product", asin, canonicalUrl: `https://${AMAZON_TR_HOST}/dp/${asin}` };
+  }
+  const url = parseUrl(trimmed);
   if (url.protocol !== "https:" || url.username || url.password || url.port) {
     throw new Error("INVALID_URL");
   }
