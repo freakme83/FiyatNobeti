@@ -29,9 +29,9 @@ globalThis.chrome = {
     onMessage: { addListener(fn) { listener = fn; } },
     onInstalled: { addListener(fn) { installedListener = fn; } },
     async sendMessage(message) {
-      assert.equal(message.type, "PARSE_HTML");
+      assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG"].includes(message.type));
       assert.match(message.html, /corePrice_feature_div/);
-      if (parseHandler) return parseHandler(message.html);
+      if (parseHandler) return parseHandler(message.html, message.type);
       return { status: "success", priceTry: 36000 };
     }
   },
@@ -67,9 +67,11 @@ globalThis.fetch = async (url, options) => {
   return fetchResult;
 };
 const {
+  diagnoseProductForDev,
   prepareAutomaticAlarmTestForDev,
   runAutomaticAlarmTestForDev,
-  runOneAutomaticCheckForDev
+  runOneAutomaticCheckForDev,
+  setDeveloperEventRecorderForDev
 } = await import("../background.js");
 assert.equal(globalThis.fiyatNobetiDev, undefined);
 const productionListeners = { listener, alarmListener, installedListener };
@@ -1070,4 +1072,72 @@ test("failed scheduled developer fetch preserves the last successful price", asy
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 599.99);
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulCheckAt, "2026-10-21T10:00:00.000Z");
   });
+});
+
+test("developer diagnosis uses one safe fetch and does not mutate product check fields", async () => {
+  await resetWatchlist();
+  setDeveloperEventRecorderForDev(() => Promise.resolve());
+  const product = seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:00:00.000Z", status: "success" });
+  product.lastSuccessfulPriceTry = 599.99;
+  const before = structuredClone(stored.watchlist);
+  let requests = 0;
+  fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
+  parseHandler = (_, type) => {
+    assert.equal(type, "PARSE_HTML_DIAG");
+    return { status: "failure", errorCode: "PRICE_MISSING", diagnostics: {
+      primaryContainerPresent: true, primaryCandidateCount: 0
+    } };
+  };
+  try {
+    const result = await diagnoseProductForDev("B0D47HCRZ6");
+    assert.equal(result.outcome, "failure");
+    assert.equal(result.errorCode, "PRICE_MISSING");
+    assert.equal(result.structure.primaryCandidateCount, 0);
+    assert.equal(result.responseBytes > 0, true);
+    assert.equal(result.contentType, "text/html");
+    assert.equal(result.requestStarted, true);
+    assert.equal(requests, 1);
+    assert.equal(fetched.url, product.canonicalUrl);
+    assert.equal(fetched.options.credentials, "omit");
+    assert.equal(fetched.options.redirect, "manual");
+    assert.deepEqual(stored.watchlist, before);
+    assert.doesNotMatch(JSON.stringify(result), /corePrice_feature_div|cookie|<div/);
+  } finally { setDeveloperEventRecorderForDev(undefined); }
+});
+
+test("developer diagnosis respects permission and does not fetch", async () => {
+  await resetWatchlist();
+  setDeveloperEventRecorderForDev(() => Promise.resolve());
+  seedProduct("B0D47HCRZ6");
+  deniedOrigins.add("https://www.amazon.com.tr/*");
+  let requests = 0;
+  fetchHandler = async () => { requests++; return htmlResponse(); };
+  try {
+    const result = await diagnoseProductForDev("B0D47HCRZ6");
+    assert.equal(result.errorCode, "PERMISSION_REQUIRED");
+    assert.equal(result.requestStarted, false);
+    assert.equal(requests, 0);
+  } finally { setDeveloperEventRecorderForDev(undefined); }
+});
+
+test("concurrent diagnosis is busy and removal invalidates an old response", async () => {
+  await resetWatchlist();
+  setDeveloperEventRecorderForDev(() => Promise.resolve());
+  seedProduct("B0D47HCRZ6");
+  const gate = deferred();
+  const started = deferred();
+  let requests = 0;
+  fetchHandler = async () => { requests++; started.resolve(); await gate.promise; return htmlResponse("B0D47HCRZ6"); };
+  try {
+    const pending = diagnoseProductForDev("B0D47HCRZ6");
+    await started.promise;
+    assert.equal((await diagnoseProductForDev("B0D47HCRZ6")).errorCode, "CHECK_BUSY");
+    await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
+    const replacement = seedProduct("B0D47HCRZ6", { addedAt: "2026-10-22T00:00:00.000Z" });
+    gate.resolve();
+    const result = await pending;
+    assert.equal(result.errorCode, "CHECK_CANCELLED");
+    assert.equal(requests, 1);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.addedAt, replacement.addedAt);
+  } finally { setDeveloperEventRecorderForDev(undefined); }
 });

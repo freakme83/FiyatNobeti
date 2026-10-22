@@ -12,6 +12,8 @@ test("production manifest excludes the developer console entry point", async () 
   assert.equal(manifest.background.service_worker, "background.js");
   assert.notEqual(manifest.background.service_worker, "background.dev.js");
   assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
+  assert.equal((await readFile(resolve(root, "offscreen.html"), "utf8")).includes("offscreen.dev.js"), false);
+  assert.equal((await readFile(resolve(root, "background.js"), "utf8")).includes("fiyatNobetiDev"), false);
 });
 
 test("developer preparation creates an isolated manifest that enables the console entry point", async () => {
@@ -24,6 +26,10 @@ test("developer preparation creates an isolated manifest that enables the consol
     const developerBackground = await readFile(resolve(target, "background.dev.js"), "utf8");
     assert.match(developerBackground, /scheduleOneAutomaticCheckTest/);
     assert.match(developerBackground, /getLastAutomaticAlarmTest/);
+    assert.match(developerBackground, /diagnoseProduct: diagnoseProductForDev/);
+    assert.match(developerBackground, /getAutomaticCheckDiagnostics/);
+    assert.match(await readFile(resolve(target, "offscreen.html"), "utf8"), /offscreen.dev.js/);
+    assert.match(await readFile(resolve(target, "offscreen.dev.js"), "utf8"), /installDeveloperPriceParser/);
     assert.match(await readFile(resolve(target, "dev-automatic-alarm.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
 
     const productionManifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
