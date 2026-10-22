@@ -31,6 +31,16 @@ const inFlightChecks = new Map();
 const productInstances = new Map();
 let nextProductInstance = 0;
 let automaticRun;
+let developerEventRecorder;
+
+export function setDeveloperEventRecorderForDev(record) {
+  developerEventRecorder = typeof record === "function" ? record : undefined;
+}
+
+function recordDeveloperEvent(event) {
+  try { developerEventRecorder?.(event)?.catch?.(() => {}); }
+  catch { /* Developer diagnostics cannot affect normal checks. */ }
+}
 
 function shortLinkDiagnostics(error) {
   const diagnostics = {};
@@ -54,7 +64,7 @@ async function ensureOffscreen() {
   await creatingOffscreen;
 }
 
-async function readLimitedHtml(response) {
+async function readLimitedHtml(response, diagnostic) {
   const length = Number(response.headers.get("content-length"));
   if (length > MAX_HTML_BYTES) throw new Error("RESPONSE_TOO_LARGE");
   if (!response.body) throw new Error("NETWORK_ERROR");
@@ -72,11 +82,22 @@ async function readLimitedHtml(response) {
   } finally {
     reader.releaseLock();
   }
+  if (diagnostic) diagnostic.responseBytes = size;
   const decoder = new TextDecoder("utf-8");
   return chunks.map((chunk, index) => decoder.decode(chunk, { stream: index < chunks.length - 1 })).join("") + decoder.decode();
 }
 
-async function fetchProduct(canonicalUrl, { onRequestStart } = {}) {
+function classifyResponseUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return "NON_HTTPS";
+    if (url.hostname !== "www.amazon.com.tr") return "OTHER_HOST";
+    try { return parseAmazonInput(value).type === "product" ? "AMAZON_PRODUCT" : "AMAZON_OTHER"; }
+    catch { return "AMAZON_OTHER"; }
+  } catch { return "UNAVAILABLE"; }
+}
+
+async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic } = {}) {
   if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
     return { status: "failure", errorCode: "PERMISSION_REQUIRED" };
   }
@@ -90,6 +111,13 @@ async function fetchProduct(canonicalUrl, { onRequestStart } = {}) {
       redirect: "manual",
       signal: controller.signal
     });
+    if (diagnostic) {
+      diagnostic.httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
+      const mime = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+      diagnostic.contentType = typeof mime === "string" && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]{1,60}$/.test(mime) ? mime : null;
+      diagnostic.finalUrlClassification = classifyResponseUrl(response.url);
+      diagnostic.responseType = ["basic", "cors", "default", "opaque", "opaqueredirect", "error"].includes(response.type) ? response.type : "unknown";
+    }
     if (response.type === "opaqueredirect" || response.status >= 300 && response.status < 400) {
       return { status: "failure", errorCode: "REDIRECT" };
     }
@@ -98,9 +126,10 @@ async function fetchProduct(canonicalUrl, { onRequestStart } = {}) {
     if (!response.headers.get("content-type")?.toLowerCase().includes("text/html")) {
       return { status: "failure", errorCode: "HTML_STRUCTURE" };
     }
-    const html = await readLimitedHtml(response);
+    const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
-    const parsed = await chrome.runtime.sendMessage({ type: "PARSE_HTML", html });
+    const parsed = await chrome.runtime.sendMessage({ type: diagnostic ? "PARSE_HTML_DIAG" : "PARSE_HTML", html });
+    if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
     }
@@ -113,6 +142,52 @@ async function fetchProduct(canonicalUrl, { onRequestStart } = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function diagnoseProductForDev(asin) {
+  const startedAt = new Date().toISOString();
+  const report = { asin: typeof asin === "string" && /^[A-Z0-9]{10}$/.test(asin) ? asin : null,
+    startedAt, completedAt: null, outcome: "failure", requestStarted: false };
+  const finish = (result) => {
+    report.completedAt = new Date().toISOString();
+    report.outcome = result.status;
+    if (result.errorCode) report.errorCode = result.errorCode;
+    return report;
+  };
+  if (!developerEventRecorder) return finish({ status: "failure", errorCode: "DIAGNOSTICS_UNAVAILABLE" });
+  await startupRecovery;
+  if (recoveryFailed) return finish({ status: "failure", errorCode: "STORAGE_ERROR" });
+  if (!report.asin) return finish({ status: "failure", errorCode: "INVALID_PRODUCT" });
+  let flightKey;
+  let ownsFlight = false;
+  try {
+    const start = await withWatchlistLock(async () => {
+      // Direct read: diagnosis must not migrate or modify the watchlist.
+      const stored = await chrome.storage.local.get(WATCHLIST_KEY);
+      const product = normalizeWatchlist(stored[WATCHLIST_KEY]).products[asin];
+      if (!product) return { errorCode: "PRODUCT_NOT_FOUND" };
+      const identity = productInstance(asin);
+      flightKey = `${asin}:${identity}`;
+      if (automaticRun || inFlightChecks.has(flightKey)) return { errorCode: "CHECK_BUSY" };
+      inFlightChecks.set(flightKey, true);
+      ownsFlight = true;
+      return { canonicalUrl: product.canonicalUrl, identity };
+    });
+    if (start.errorCode) return finish({ status: "failure", errorCode: start.errorCode });
+    const fetched = await fetchProduct(start.canonicalUrl, {
+      diagnostic: report,
+      onRequestStart: () => { report.requestStarted = true; }
+    });
+    const current = await withWatchlistLock(async () => {
+      const stored = await chrome.storage.local.get(WATCHLIST_KEY);
+      return normalizeWatchlist(stored[WATCHLIST_KEY]).products[asin];
+    });
+    if (!current || productInstances.get(asin) !== start.identity) {
+      return finish({ status: "failure", errorCode: "CHECK_CANCELLED" });
+    }
+    return finish(fetched);
+  } catch { return finish({ status: "failure", errorCode: "STORAGE_ERROR" }); }
+  finally { if (ownsFlight && inFlightChecks.has(flightKey)) inFlightChecks.delete(flightKey); }
 }
 
 async function resolveProductInput(input) {
@@ -314,13 +389,16 @@ async function recoverInterruptedChecks() {
   return withWatchlistLock(async () => {
     const watchlist = await readWatchlist();
     let changed = false;
+    const interrupted = [];
     for (const product of Object.values(watchlist.products)) {
       if (product.lastCheckStatus !== "checking") continue;
       product.lastCheckStatus = "failure";
       product.lastErrorCode = "CHECK_INTERRUPTED";
       changed = true;
+      interrupted.push(product.asin);
     }
     if (changed) await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+    for (const asin of interrupted) recordDeveloperEvent({ type: "check_interrupted", asin, outcome: "failure", errorCode: "CHECK_INTERRUPTED" });
   });
 }
 
@@ -388,6 +466,7 @@ async function scheduleAutomaticLocked(now = Date.now()) {
   state.nextRunAt = new Date(when).toISOString();
   await saveAutoState(state);
   await chrome.alarms.create(AUTO_ALARM_NAME, { when });
+  recordDeveloperEvent({ type: "automatic_alarm_scheduled", alarmName: AUTO_ALARM_NAME, scheduledAt: new Date(when).toISOString() });
   return { settings, state };
 }
 
@@ -421,6 +500,7 @@ async function setAutoEnabled(enabled) {
 
 async function runAutomaticAlarm() {
   if (automaticRun) {
+    recordDeveloperEvent({ type: "automatic_check_skipped", outcome: "busy", errorCode: "AUTOMATIC_CHECK_RUNNING", requestStarted: false });
     await withWatchlistLock(async () => {
       const state = await readAutoState();
       state.notBefore = new Date(Date.now() + AUTO_PACE_MS).toISOString();
@@ -474,8 +554,22 @@ async function runAutomaticAlarm() {
       await scheduleAutomaticLocked(now);
       return { asin, identity };
     });
-    if (!selected) return;
-    await checkWatchlistProduct(selected.asin, { automatic: true, expectedIdentity: selected.identity });
+    if (!selected) {
+      recordDeveloperEvent({ type: "automatic_check_skipped", outcome: "skipped", requestStarted: false });
+      return;
+    }
+    recordDeveloperEvent({ type: "automatic_check_selected", asin: selected.asin, requestStarted: false });
+    let requestStarted = false;
+    const result = await checkWatchlistProduct(selected.asin, {
+      automatic: true, expectedIdentity: selected.identity,
+      onRequestStart: () => {
+        requestStarted = true;
+        recordDeveloperEvent({ type: "automatic_request_started", asin: selected.asin, requestStarted: true });
+      }
+    });
+    recordDeveloperEvent({ type: result.status === "busy" || result.status === "skipped" ? "automatic_check_skipped" : "automatic_check_completed",
+      asin: selected.asin, outcome: result.status,
+      ...(result.errorCode ? { errorCode: result.errorCode } : {}), requestStarted });
     await reconcileAutomaticSchedule();
   })();
   try { await automaticRun; }
@@ -660,6 +754,8 @@ export async function runAutomaticAlarmTestForDev({ asin, productAddedAt } = {})
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== AUTO_ALARM_NAME) return;
+  recordDeveloperEvent({ type: "automatic_alarm_delivered", alarmName: AUTO_ALARM_NAME,
+    ...(Number.isFinite(alarm.scheduledTime) ? { scheduledAt: new Date(alarm.scheduledTime).toISOString() } : {}) });
   return startupRecovery.then(() => { if (!recoveryFailed) return runAutomaticAlarm(); }).catch(() => {});
 });
 

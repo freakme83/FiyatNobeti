@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:prepare": "node scripts/prepare-dev-extension.js",
+    "package:extensions": "node scripts/package-extensions.js",
     "test": "node --test"
   }
 }

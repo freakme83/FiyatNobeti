@@ -1,0 +1,41 @@
+name: Build extension test packages
+
+on:
+  push:
+    branches:
+      - research/amazon-price-response-diagnostics
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run tests
+        run: npm test
+      - name: Prepare developer extension
+        run: npm run dev:prepare
+      - name: Package and validate extensions
+        run: npm run package:extensions
+      - name: Upload standard extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiyatnobeti-standard
+          path: artifacts/extension-packages/fiyatnobeti-standard.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload developer extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiyatnobeti-developer
+          path: artifacts/extension-packages/fiyatnobeti-developer.zip
+          if-no-files-found: error
+          retention-days: 14
