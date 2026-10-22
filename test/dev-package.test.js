@@ -24,7 +24,7 @@ test("developer preparation creates an isolated manifest that enables the consol
   try {
     assert.equal(await prepareDevExtension(root), target);
     const manifest = JSON.parse(await readFile(resolve(target, "manifest.json"), "utf8"));
-    assert.equal(manifest.name, "FiyatNöbeti (Geliştirici)");
+    assert.equal(manifest.name, "FiyatNöbeti (Dev PR #8)");
     assert.equal(manifest.background.service_worker, "background.dev.js");
     const developerBackground = await readFile(resolve(target, "background.dev.js"), "utf8");
     assert.match(developerBackground, /scheduleOneAutomaticCheckTest/);

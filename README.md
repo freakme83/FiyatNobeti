@@ -102,7 +102,9 @@ Node.js 20+ ile depo kökünde `npm test` çalıştırın. Harici paket kurulumu
 
 Altı saat beklemeden gerçek otomatik kontrol yolunu ve Chrome alarm teslimini bir kez denemek için depo kökünde `npm run dev:prepare` çalıştırın. Komut, Git tarafından yok sayılan `.fiyatnobeti-dev` klasörüne ayrı bir geliştirici yüklemesi hazırlar; normal `manifest.json` değişmez ve standart yüklemede geliştirici komutları ile test alarmı bulunmaz.
 
-Chrome'da `chrome://extensions` sayfasında Geliştirici modu'nu açıp `.fiyatnobeti-dev` klasörünü paketlenmemiş uzantı olarak yükleyin. macOS dosya seçicisinde gizli klasörü göstermek gerekirse `Command + Shift + .` kullanın. Comet paketlenmemiş Chromium uzantılarını destekliyorsa uzantı yönetimi ekranında aynı klasörü yükleyin. **FiyatNöbeti (Geliştirici)** popup'ından en az bir ürün ekleyerek Amazon Türkiye iznini kullanıcı eylemiyle verin. Otomatik kontrolün açık kaldığını doğrulayın.
+Chrome'da `chrome://extensions` sayfasında Geliştirici modu'nu açıp **Paketlenmemiş öğe yükle (Load unpacked)** seçeneğiyle `.fiyatnobeti-dev` klasörünü seçin. macOS dosya seçicisinde gizli klasörü göstermek gerekirse `Command + Shift + .` kullanın. Comet paketlenmemiş Chromium uzantılarını destekliyorsa uzantı yönetimi ekranında aynı klasörü yükleyin. **FiyatNöbeti (Dev PR #8)** popup'ından en az bir ürün ekleyerek Amazon Türkiye iznini kullanıcı eylemiyle verin. Otomatik kontrolün açık kaldığını doğrulayın.
+
+Tanı testleri için uzantı adı `.fiyatnobeti-dev` paketinde **FiyatNöbeti (Dev PR #8)** olarak görünür; bu ad yalnızca geliştirici kopyasında değiştirilir ve standart uzantı adı aynı kalır.
 
 Uzantı kartındaki servis çalışanı **İncele** bağlantısını açın ve yaklaşık iki dakika sonrası için tek seferlik gerçek Chrome alarmını kurun:
 
@@ -143,13 +145,22 @@ Standart sürüme dönmek için geliştirici yüklemesini uzantı ekranından ka
 
 ### Geliştirici fiyat yanıtı ve otomatik kontrol tanıları
 
-`npm run dev:prepare` ile üretilen ayrı **FiyatNöbeti (Geliştirici)** yüklemesinde, kaydedilmiş tek bir ürünün arka plan HTML yanıtını ek bir istek yapmadan incelemek için servis çalışanının DevTools Konsolu'nda şunu çalıştırın:
+`npm run dev:prepare` ile üretilen ayrı **FiyatNöbeti (Dev PR #8)** yüklemesinde, kaydedilmiş tek bir ürünün arka plan HTML yanıtını ek bir istek yapmadan incelemek için servis çalışanının DevTools Konsolu'nda şunu çalıştırın:
 
 ```javascript
 await globalThis.fiyatNobetiDev.diagnoseProduct("6259174209")
 ```
 
 Bu komut yalnızca açıkça çağrıldığında bir ürün isteği yapar; normal izin, kimlik bilgisi göndermeme, yönlendirme, 20 saniye ve 5 MiB sınırlarını kullanır. Ürün listesindeki fiyat ve kontrol zamanlarını değiştirmez; eşzamanlı kontrol varsa `CHECK_BUSY`, ürün kaldırılırsa `CHECK_CANCELLED` döner. Raporda UTC başlangıç/bitiş zamanları, güvenli HTTP durumu ve MIME türü, son URL'nin yalnızca sınıfı, yaklaşık bayt sayısı, başlık/ana fiyat kapsayıcısının varlığı, birincil ve alternatif yapıların sınırlı sayıları ve mevcut ayrıştırıcının sonucu yer alır. Yalnızca aşağıda açıklanan dar koşulları sağlayan payable-price etiketi fallback olabilir; diğer alternatifler **fiyat kaynağı olarak kullanılmaz**. Ham HTML, fiyat metni, başlık metni, çerez, tam URL ve HTTP başlıkları döndürülmez veya saklanmaz. `PRICE_MISSING` ile ağ/HTTP/bot sayfası ayrımını gözlemlemeyi sağlar; tarayıcıda görülen DOM ile arka plan HTML'sinin aynı olduğunu varsaymaz.
+
+Geliştirici paketindeki yapısal fiyat tanısını kullanmak için Mac Chrome'da PR #8 checkout'unda terminalden `npm run dev:prepare` çalıştırın; `chrome://extensions` içinden **FiyatNöbeti (Dev PR #8)** kartını bulun ve **Hizmet çalışanı → İncele** konsolunu açın. Ürün listesinde yoksa popup üzerinden önce `6052657669` ve `6259174209` ASIN'lerini ekleyin. Konsolda her kitap için tanı komutunu bir kez çalıştırın:
+
+```javascript
+await globalThis.fiyatNobetiDev.diagnoseProduct("6052657669")
+await globalThis.fiyatNobetiDev.diagnoseProduct("6259174209")
+```
+
+Sonuçların `diagnostics.alternatives.apexPriceToPay.elements` alanında her etiketin `insidePrimaryContainer`, `tagName`, sınırlı `ancestry`, `nearbyPriceRegion`, `insideExcludedContext` ve `fallback.rejectionReason` değerlerini karşılaştırın. `parserOutcome` gerçek parser sonucunu ve fallback yolunun uygun olup olmadığını gösterir. Her komut en fazla bir açık ürün isteği yapar; HTML, tutarlar ve bilinmeyen DOM değerleri rapora alınmaz. Tanı komutunu tekrar çalıştırmak yeni bir Amazon isteği yapar.
 
 Geliştirici yüklemesinde, gelecekteki otomatik kontrol olaylarını okumak için:
 
