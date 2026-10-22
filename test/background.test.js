@@ -1141,3 +1141,26 @@ test("concurrent diagnosis is busy and removal invalidates an old response", asy
     assert.equal(stored.watchlist.products.B0D47HCRZ6.addedAt, replacement.addedAt);
   } finally { setDeveloperEventRecorderForDev(undefined); }
 });
+
+test("developer alarm events distinguish delivery and request without changing the six-hour schedule", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-20T11:00:00.000Z" });
+    const events = [];
+    setDeveloperEventRecorderForDev(event => { events.push(event); return Promise.resolve(); });
+    try {
+      await installedListener();
+      assert.ok(events.some(event => event.type === "automatic_alarm_scheduled"));
+      assert.equal(events.some(event => event.type === "automatic_request_started"), false);
+      advanceToAlarm(clock);
+      await fireAutomaticAlarm();
+      const types = events.map(event => event.type);
+      assert.ok(types.indexOf("automatic_alarm_delivered") < types.indexOf("automatic_request_started"));
+      assert.ok(types.indexOf("automatic_request_started") < types.indexOf("automatic_check_completed"));
+      assert.equal(events.find(event => event.type === "automatic_check_completed").requestStarted, true);
+      const checkedAt = Date.parse(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt);
+      assert.ok(alarms.get(AUTO_ALARM_NAME).scheduledTime >= checkedAt + AUTO_INTERVAL_MS);
+    } finally { setDeveloperEventRecorderForDev(undefined); }
+  });
+});
