@@ -92,7 +92,8 @@ function classifyResponseUrl(value) {
     const url = new URL(value);
     if (url.protocol !== "https:") return "NON_HTTPS";
     if (url.hostname !== "www.amazon.com.tr") return "OTHER_HOST";
-    return /^\/(?:dp|gp\/product)\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname) ? "AMAZON_PRODUCT" : "AMAZON_OTHER";
+    try { return parseAmazonInput(value).type === "product" ? "AMAZON_PRODUCT" : "AMAZON_OTHER"; }
+    catch { return "AMAZON_OTHER"; }
   } catch { return "UNAVAILABLE"; }
 }
 

@@ -1081,7 +1081,12 @@ test("developer diagnosis uses one safe fetch and does not mutate product check 
   product.lastSuccessfulPriceTry = 599.99;
   const before = structuredClone(stored.watchlist);
   let requests = 0;
-  fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
+  fetchHandler = async () => {
+    requests++;
+    const response = htmlResponse("B0D47HCRZ6");
+    Object.defineProperty(response, "url", { value: "https://www.amazon.com.tr/Oral-B-Firca/dp/B0D47HCRZ6?ref_=private" });
+    return response;
+  };
   parseHandler = (_, type) => {
     assert.equal(type, "PARSE_HTML_DIAG");
     return { status: "failure", errorCode: "PRICE_MISSING", diagnostics: {
@@ -1095,13 +1100,14 @@ test("developer diagnosis uses one safe fetch and does not mutate product check 
     assert.equal(result.structure.primaryCandidateCount, 0);
     assert.equal(result.responseBytes > 0, true);
     assert.equal(result.contentType, "text/html");
+    assert.equal(result.finalUrlClassification, "AMAZON_PRODUCT");
     assert.equal(result.requestStarted, true);
     assert.equal(requests, 1);
     assert.equal(fetched.url, product.canonicalUrl);
     assert.equal(fetched.options.credentials, "omit");
     assert.equal(fetched.options.redirect, "manual");
     assert.deepEqual(stored.watchlist, before);
-    assert.doesNotMatch(JSON.stringify(result), /corePrice_feature_div|cookie|<div/);
+    assert.doesNotMatch(JSON.stringify(result), /corePrice_feature_div|cookie|<div|ref_=private/);
   } finally { setDeveloperEventRecorderForDev(undefined); }
 });
 
