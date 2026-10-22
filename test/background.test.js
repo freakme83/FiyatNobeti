@@ -24,6 +24,7 @@ let installedListener;
 let startupListener;
 const alarms = new Map();
 const alarmCreations = [];
+let notificationCreations = 0;
 globalThis.chrome = {
   runtime: {
     id: "test-extension",
@@ -60,7 +61,8 @@ globalThis.chrome = {
       return Object.fromEntries(requested.map(key => [key, stored[key]]));
     },
     async set(value) { Object.assign(stored, value); }
-  } }
+  } },
+  notifications: { async create() { notificationCreations++; return "unexpected-production-notification"; } }
 };
 const deniedOrigins = new Set();
 globalThis.fetch = async (url, options) => {
@@ -748,6 +750,27 @@ test("failed automatic checks also defer retry by three hours", async () => {
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastErrorCode, "HTTP_ERROR");
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, new Date(clock.now).toISOString());
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("ordinary successful and failed automatic checks do not create notifications", async () => {
+  useProductionBackground();
+  await withClock("2026-10-22T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    notificationCreations = 0;
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-22T06:00:00.000Z" });
+    fetchHandler = async () => htmlResponse("B0D47HCRZ6");
+    await installedListener();
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "success");
+    assert.equal(notificationCreations, 0);
+
+    fetchHandler = async () => new Response("Unavailable", { status: 503, headers: { "content-type": "text/html" } });
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "failure");
+    assert.equal(notificationCreations, 0);
   });
 });
 
