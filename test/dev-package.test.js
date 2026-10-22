@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { prepareDevExtension } from "../scripts/prepare-dev-extension.js";
+import { packageExtensions } from "../scripts/package-extensions.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -35,6 +38,50 @@ test("developer preparation creates an isolated manifest that enables the consol
     const productionManifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
     assert.equal(productionManifest.background.service_worker, "background.js");
   } finally {
+    await rm(target, { recursive: true, force: true });
+  }
+});
+
+test("standard and developer ZIPs have loadable roots and only their runtime files", async () => {
+  const target = resolve(root, ".fiyatnobeti-dev");
+  const output = await mkdtemp(join(tmpdir(), "fiyatnobeti-packages-"));
+  try {
+    await prepareDevExtension(root);
+    const packages = await packageExtensions(output, root);
+    assert.equal(packages.standardZip, join(output, "fiyatnobeti-standard.zip"));
+    assert.equal(packages.developerZip, join(output, "fiyatnobeti-developer.zip"));
+
+    const standardEntries = spawnSync("unzip", ["-Z1", packages.standardZip], { encoding: "utf8" });
+    const developerEntries = spawnSync("unzip", ["-Z1", packages.developerZip], { encoding: "utf8" });
+    assert.equal(standardEntries.status, 0, standardEntries.stderr);
+    assert.equal(developerEntries.status, 0, developerEntries.stderr);
+    const standardFiles = standardEntries.stdout.split(/\r?\n/).filter(Boolean);
+    const developerFiles = developerEntries.stdout.split(/\r?\n/).filter(Boolean);
+    assert.ok(standardFiles.includes("manifest.json"));
+    assert.ok(developerFiles.includes("manifest.json"));
+    assert.ok(standardFiles.includes("background.js"));
+    assert.ok(!standardFiles.includes("background.dev.js"));
+    assert.ok(!standardFiles.includes("offscreen.dev.js"));
+    assert.ok(!standardFiles.includes("dev-automatic-alarm.js"));
+    assert.ok(!standardFiles.includes("dev-observability.js"));
+    assert.ok(developerFiles.includes("background.dev.js"));
+    assert.ok(developerFiles.includes("offscreen.dev.js"));
+    assert.ok(developerFiles.includes("dev-automatic-alarm.js"));
+    assert.ok(developerFiles.includes("dev-observability.js"));
+    assert.ok(developerFiles.includes("scripts/dev-price-response.js"));
+    assert.ok(!standardFiles.some(path => /(^|\/)(test|\.git|\.github|node_modules)(\/|$)/.test(path)));
+    assert.ok(!developerFiles.some(path => /(^|\/)(test|\.git|\.github|node_modules)(\/|$)/.test(path)));
+
+    const standardManifestResult = spawnSync("unzip", ["-p", packages.standardZip, "manifest.json"], { encoding: "utf8" });
+    const developerManifestResult = spawnSync("unzip", ["-p", packages.developerZip, "manifest.json"], { encoding: "utf8" });
+    assert.equal(standardManifestResult.status, 0);
+    assert.equal(developerManifestResult.status, 0);
+    assert.equal(JSON.parse(standardManifestResult.stdout).background.service_worker, "background.js");
+    assert.equal(JSON.parse(developerManifestResult.stdout).background.service_worker, "background.dev.js");
+    assert.equal(JSON.parse(await readFile(resolve(output, "developer/manifest.json"), "utf8")).manifest_version, 3);
+    assert.equal(JSON.parse(await readFile(resolve(output, "standard/manifest.json"), "utf8")).manifest_version, 3);
+  } finally {
+    await rm(output, { recursive: true, force: true });
     await rm(target, { recursive: true, force: true });
   }
 });

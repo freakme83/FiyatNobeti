@@ -8,6 +8,18 @@ Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını el
 
 **Perplexity Comet:** Comet'in Chromium uzantı yönetimi ekranı paketlenmemiş uzantı yüklemeyi sunuyorsa geliştirici modunu açıp aynı depo klasörünü seçin. Comet'in bu API'leri desteklediği henüz doğrulanmadı; yükleme seçeneği veya `chrome.offscreen` yoksa prototip orada çalışmayabilir.
 
+## Testing without Node.js
+
+For Windows testers who cannot install Node.js, use the ready-to-load GitHub Actions packages. No PowerShell, administrator permission, terminal, or local build command is needed to generate them.
+
+1. Open this repository's **Actions** tab and select the latest successful **Build extension test packages** run for PR #6 (or its branch).
+2. Download the `fiyatnobeti-developer` artifact. GitHub downloads artifacts in a wrapper ZIP; extract it, then extract the included `fiyatnobeti-developer.zip`.
+3. Open `chrome://extensions`, enable **Developer mode**, and click **Load unpacked**.
+4. Select the extracted developer package folder containing `manifest.json`.
+5. Use FiyatNöbeti normally. For diagnostics, open the extension's service worker **Inspect** console and use the developer commands documented below.
+
+The standard package is also available as the `fiyatnobeti-standard` artifact. Chrome cannot load an extension directly from a ZIP, so the package must be extracted first. Artifacts may require GitHub sign-in and are retained for 14 days. Developers can continue to generate a local package with `npm run dev:prepare`.
+
 ## Yerel izleme listesi
 
 1. Amazon erişim izinlerinden biri eksikse popup önce karşılama/izin tamamlama ekranını gösterir. **Amazon erişimini etkinleştir** düğmesine basıp Chrome'un izin penceresini onaylayın. Bu tek tıklama, eksik olan `https://www.amazon.com.tr/*` ve `https://amzn.eu/*` izinlerini ister. Ürün bağlantısını ancak normal ekran açıldıktan sonra girin.
