@@ -10,7 +10,9 @@ test("supports canonical, legacy, title and percent-encoded Turkish product URLs
     ["https://www.amazon.com.tr/Soundcore-Kulakl%C4%B1k-G%C3%BCr%C3%BClt%C3%BC/dp/B0CQXKXBR7", "B0CQXKXBR7"],
     ["https://www.amazon.com.tr/Soundcore-Kablosuz-Kulaklik/dp/b0cqxkxbr7/ref=sr_1_1?pd_rd_w=example&ref_=example#details", "B0CQXKXBR7"],
     ["https://www.amazon.com.tr/gp/product/B0CQXKXBR7/ref=ox_sc_act_title_1/?tag=discard", "B0CQXKXBR7"],
-    ["https://www.amazon.com.tr/dp/B0FZ9Y4GPF?tag=sample#details", "B0FZ9Y4GPF"]
+    ["https://www.amazon.com.tr/dp/B0FZ9Y4GPF?tag=sample#details", "B0FZ9Y4GPF"],
+    ["https://www.amazon.com.tr/SoundPEATS-Air4-Pro-Kulakl%C4%B1klar-Uyarlanabilir/dp/B0CKXJBQ6L/ref=dp_fod_d_sccl_2/258-5197637-2641928?pd_rd_i=B0CKXJBQ6L&psc=1", "B0CKXJBQ6L"],
+    ["https://www.amazon.com.tr/Kiz/dp/6052657669/ref=pd_bxgy_thbs_d_sccl_1/261-7744755-0782146?psc=1", "6052657669"]
   ];
   for (const [input, asin] of cases) {
     assert.deepEqual(normalizeAmazonUrl(input), {
@@ -38,6 +40,27 @@ test("accepts an Amazon short link only in the expected HTTPS format", () => {
   ]) assert.throws(() => parseAmazonInput(value));
 });
 
+test("accepts standalone ASINs and normalizes them to canonical product URLs", () => {
+  const cases = [
+    ["B0CKXJBQ6L", "B0CKXJBQ6L"],
+    ["b0ckxjbq6l", "B0CKXJBQ6L"],
+    ["6052657669", "6052657669"],
+    ["  6259174209  ", "6259174209"]
+  ];
+  for (const [input, asin] of cases) {
+    assert.deepEqual(parseAmazonInput(input), {
+      type: "product",
+      asin,
+      canonicalUrl: `https://www.amazon.com.tr/dp/${asin}`
+    });
+  }
+  assert.deepEqual(parseAmazonInput("https://www.amazon.com.tr/dp/b0ckxjbq6l?tag=discard"), {
+    type: "product",
+    asin: "B0CKXJBQ6L",
+    canonicalUrl: "https://www.amazon.com.tr/dp/B0CKXJBQ6L"
+  });
+});
+
 test("rejects unrelated hosts, deceptive subdomains, credentials, ports and unsafe protocols", () => {
   for (const value of [
     "https://amazon.com.tr/dp/B0FZ9Y4GPF",
@@ -61,6 +84,9 @@ test("rejects malformed, ambiguous and arbitrary paths instead of searching quer
     "https://www.amazon.com.tr/dp/B0FZ9Y4GPF/dp/B0CQXKXBR7",
     "https://www.amazon.com.tr/dp/B0FZ9Y4GP/ref=abc",
     "https://www.amazon.com.tr/dp/B0FZ9Y4GPF/ref=ok/other",
+    "https://www.amazon.com.tr/dp/B0FZ9Y4GPF/ref=ok/258-5197637-2641928/extra",
+    "https://www.amazon.com.tr/dp/B0FZ9Y4GPF/ref=ok/258-5197637-264192",
+    "https://www.amazon.com.tr/dp/B0FZ9Y4GPF/258-5197637-2641928",
     "https://www.amazon.com.tr/gp/aw/d/B0FZ9Y4GPF",
     "https://www.amazon.com.tr/%2Fdp/B0FZ9Y4GPF"
   ]) assert.throws(() => normalizeAmazonUrl(value));
@@ -68,4 +94,16 @@ test("rejects malformed, ambiguous and arbitrary paths instead of searching quer
     normalizeAmazonUrl("https://www.amazon.com.tr/dp/B0FZ9Y4GPF?path=/dp/B0CQXKXBR7").asin,
     "B0FZ9Y4GPF"
   );
+});
+
+test("rejects malformed standalone ASINs and arbitrary text containing an ASIN", () => {
+  for (const value of [
+    "B0CKXJBQ6",
+    "B0CKXJBQ6LX",
+    "B0CKXJBQ-6",
+    "B0CKXJBQ6İ",
+    "product B0CKXJBQ6",
+    "B0CKXJBQ6 extra",
+    ""
+  ]) assert.throws(() => parseAmazonInput(value));
 });

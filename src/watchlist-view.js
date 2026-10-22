@@ -27,7 +27,7 @@ const ERROR_LABELS = {
   TIMEOUT: "Amazon isteği zaman aşımına uğradı.",
   NETWORK_ERROR: "Amazon için ağ isteği başarısız oldu.",
   PARSE_ERROR: "Amazon ürün yanıtı ayrıştırılamadı.",
-  INVALID_URL: "Geçerli bir Amazon Türkiye ürün bağlantısı girin.",
+  INVALID_URL: "Geçerli bir Amazon Türkiye ürün bağlantısı veya ASIN girin.",
   UNSUPPORTED_URL: "Bu Amazon bağlantısı desteklenmiyor.",
   UNSUPPORTED_MARKETPLACE: "Bu bağlantı Amazon Türkiye'ye ait değil.",
   STORAGE_ERROR: "İzleme listesi yerel olarak okunamadı veya kaydedilemedi."
