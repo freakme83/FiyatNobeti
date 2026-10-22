@@ -116,7 +116,7 @@ const htmlResponse = (asin = "B0FZ9Y4GPF") => new Response(`<div id="corePrice_f
 });
 const resetWatchlist = async () => {
   stored.watchlist = { version: 1, products: {} };
-  stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 360 };
+  stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 180 };
   stored.automaticCheckState = { version: 1, nextRunAt: null, notBefore: null, unknownSince: {}, lastErrorCode: null };
   alarms.clear();
   alarmCreations.length = 0;
@@ -564,13 +564,13 @@ test("watchlist rendering treats untrusted titles as plain text", () => {
   assert.match(errorMessage("CHECK_INTERRUPTED"), /yeniden başladığı için kesildi/);
 });
 
-test("automatic checks default to six hours and restore only a missing owned alarm", async () => {
+test("automatic checks default to three hours and restore only a missing owned alarm", async () => {
   await withClock("2026-10-21T12:00:00.000Z", async clock => {
     await resetWatchlist();
     delete stored.automaticChecks;
     await installedListener();
     const settings = await message("GET_AUTO_SETTINGS");
-    assert.deepEqual(settings.settings, { version: 1, enabled: true, intervalMinutes: 360 });
+    assert.deepEqual(settings.settings, { version: 1, enabled: true, intervalMinutes: 180 });
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
     const count = alarmCreations.length;
     await installedListener();
@@ -579,6 +579,123 @@ test("automatic checks default to six hours and restore only a missing owned ala
     await installedListener();
     assert.equal(alarmCreations.length, count + 1);
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("legacy settings and an obsolete six-hour alarm migrate without fetching or changing product history", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    const product = seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T08:00:00.000Z", status: "failure" });
+    product.lastSuccessfulPriceTry = 12345;
+    product.lastSuccessfulCheckAt = "2026-10-20T08:00:00.000Z";
+    const history = structuredClone(product);
+    stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 360 };
+    stored.automaticCheckState.nextRunAt = "2026-10-21T14:00:00.000Z";
+    alarms.set(AUTO_ALARM_NAME, { name: AUTO_ALARM_NAME, scheduledTime: Date.parse(stored.automaticCheckState.nextRunAt) });
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
+
+    await installedListener();
+    assert.deepEqual(stored.automaticChecks, { version: 1, enabled: true, intervalMinutes: 180 });
+    assert.deepEqual(stored.watchlist.products.B0D47HCRZ6, history);
+    assert.equal(requests, 0);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(requests, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("migration leaves a one-hour-old product ineligible and a disabled installation disabled", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:00:00.000Z" });
+    stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 360 };
+    stored.automaticCheckState.nextRunAt = "2026-10-21T17:00:00.000Z";
+    alarms.set(AUTO_ALARM_NAME, { name: AUTO_ALARM_NAME, scheduledTime: Date.parse(stored.automaticCheckState.nextRunAt) });
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse(); };
+    await installedListener();
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + 2 * 60 * 60 * 1000);
+    assert.equal(requests, 0);
+    stored.automaticChecks = { version: 1, enabled: false, intervalMinutes: 360 };
+    await installedListener();
+    assert.deepEqual(stored.automaticChecks, { version: 1, enabled: false, intervalMinutes: 180 });
+    assert.equal(alarms.has(AUTO_ALARM_NAME), false);
+    assert.equal(requests, 0);
+  });
+});
+
+test("a restart after missed periods checks once and bases the next three hours on that attempt", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T08:00:00.000Z" });
+    stored.automaticCheckState.nextRunAt = "2026-10-21T11:00:00.000Z";
+    let requests = 0;
+    fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
+    await startupListener();
+    assert.equal(requests, 0);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(requests, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    clock.advance(12 * 60 * 60 * 1000);
+    alarms.delete(AUTO_ALARM_NAME);
+    await startupListener();
+    assert.equal(requests, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(requests, 2);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+  });
+});
+
+test("migration shortens old interval cooldown but retains pacing and permission backoff", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T08:00:00.000Z" });
+    stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 360 };
+    stored.automaticCheckState.notBefore = "2026-10-21T14:00:00.000Z";
+    await installedListener();
+    assert.equal(stored.automaticCheckState.notBefore, new Date(clock.now + AUTO_PACE_MS).toISOString());
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T08:00:00.000Z" });
+    stored.automaticChecks.intervalMinutes = 360;
+    stored.automaticCheckState.notBefore = new Date(clock.now + 30_000).toISOString();
+    await installedListener();
+    assert.equal(stored.automaticCheckState.notBefore, new Date(clock.now + 30_000).toISOString());
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
+
+    await resetWatchlist();
+    seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T08:00:00.000Z" });
+    stored.automaticChecks.intervalMinutes = 360;
+    stored.automaticCheckState.lastErrorCode = "PERMISSION_REQUIRED";
+    stored.automaticCheckState.notBefore = "2026-10-21T14:00:00.000Z";
+    permission = false;
+    await installedListener();
+    assert.equal(stored.automaticCheckState.notBefore, "2026-10-21T14:00:00.000Z");
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, Date.parse("2026-10-21T14:00:00.000Z"));
+  });
+});
+
+test("unsupported legacy settings fail closed without altering stored settings or fetching", async () => {
+  await withClock("2026-10-21T12:00:00.000Z", async () => {
+    for (const invalid of [{ version: 2, enabled: true, intervalMinutes: 360 },
+      { version: 1, enabled: "true", intervalMinutes: 360 },
+      { version: 1, enabled: true, intervalMinutes: "360" }]) {
+      await resetWatchlist();
+      stored.automaticChecks = invalid;
+      let requests = 0;
+      fetchHandler = async () => { requests++; return htmlResponse(); };
+      assert.deepEqual(await message("GET_AUTO_SETTINGS"), { status: "failure", errorCode: "STORAGE_ERROR" });
+      assert.deepEqual(stored.automaticChecks, invalid);
+      assert.equal(requests, 0);
+    }
   });
 });
 
@@ -600,7 +717,7 @@ test("disabling clears only the automatic alarm while manual checks still work",
   });
 });
 
-test("addition and manual refresh delay automatic eligibility for six elapsed hours", async () => {
+test("addition and manual refresh delay automatic eligibility for three elapsed hours", async () => {
   await withClock("2026-10-21T12:00:00.000Z", async clock => {
     await resetWatchlist();
     let requests = 0;
@@ -620,7 +737,7 @@ test("addition and manual refresh delay automatic eligibility for six elapsed ho
   });
 });
 
-test("failed automatic checks also defer retry by six hours", async () => {
+test("failed automatic checks also defer retry by three hours", async () => {
   await withClock("2026-10-21T12:00:00.000Z", async clock => {
     await resetWatchlist();
     seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T06:00:00.000Z" });
@@ -761,7 +878,7 @@ test("disabling during an active automatic check stops later scheduled requests"
   });
 });
 
-test("restart recovers a checking product and waits for its six-hour eligibility", async () => {
+test("restart recovers a checking product and waits for its three-hour eligibility", async () => {
   await withClock("2026-10-21T12:00:00.000Z", async clock => {
     await resetWatchlist();
     const product = seedProduct("B0D47HCRZ6", {
@@ -773,7 +890,7 @@ test("restart recovers a checking product and waits for its six-hour eligibility
     await message("GET_AUTO_SETTINGS");
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastErrorCode, "CHECK_INTERRUPTED");
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 123);
-    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, Date.parse("2026-10-21T17:59:00.000Z"));
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, Date.parse("2026-10-21T14:59:00.000Z"));
     assert.ok(alarms.get(AUTO_ALARM_NAME).scheduledTime > clock.now);
   });
 });
@@ -794,7 +911,7 @@ test("malformed timestamps receive a persistent cooldown across a worker restart
   });
 });
 
-test("developer trigger bypasses eligibility for one product and resumes the six-hour schedule", async () => {
+test("developer trigger bypasses eligibility for one product and resumes the three-hour schedule", async () => {
   useProductionBackground();
   enableDeveloperTestApi();
   await withClock("2026-10-21T12:00:00.000Z", async clock => {
@@ -821,8 +938,8 @@ test("developer trigger bypasses eligibility for one product and resumes the six
     assert.equal(requests[0].options.cache, "no-store");
     assert.equal(stored.watchlist.products.B0CQXKXBR7.lastSuccessfulPriceTry, 321);
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, "2026-10-21T11:59:00.000Z");
-    assert.equal(stored.automaticChecks.intervalMinutes, 360);
-    assert.equal(AUTO_INTERVAL_MS, 6 * 60 * 60 * 1000);
+    assert.equal(stored.automaticChecks.intervalMinutes, 180);
+    assert.equal(AUTO_INTERVAL_MS, 3 * 60 * 60 * 1000);
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
     await alarmListener({ name: AUTO_ALARM_NAME, scheduledTime: clock.now });
     assert.equal(requests.length, 1);
@@ -1175,7 +1292,7 @@ test("concurrent diagnosis is busy and removal invalidates an old response", asy
   } finally { setDeveloperEventRecorderForDev(undefined); }
 });
 
-test("developer alarm events distinguish delivery and request without changing the six-hour schedule", async () => {
+test("developer alarm events distinguish delivery and request without changing the three-hour schedule", async () => {
   useProductionBackground();
   await withClock("2026-10-21T12:00:00.000Z", async clock => {
     await resetWatchlist();
