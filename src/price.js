@@ -1,6 +1,8 @@
 const PRIMARY_SELECTOR = "#corePrice_feature_div .a-offscreen";
+const PAYABLE_PRICE_SELECTOR = "#apex-pricetopay-accessibility-label";
 const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
 const MAX_PRICE_ANCESTORS = 6;
+const EXCLUDED_PRICE_CONTEXT = /(?:coupon|shipping|installment|monthly|used|other.?seller|recommend|similar|variation|format|unit|discount|list.?price)/i;
 
 export function extractProductTitle(doc) {
   const candidate = doc.querySelector("#productTitle")?.textContent;
@@ -20,6 +22,35 @@ function isUnitPriceCandidate(candidate) {
     }
   }
   return false;
+}
+
+function isQualifiedPayablePrice(candidate, primaryContainer) {
+  if (!candidate || candidate.tagName !== "span") return false;
+  let withinPrimaryContainer = false;
+  for (let ancestor = candidate; ancestor; ancestor = ancestor.parentElement) {
+    if (ancestor === primaryContainer) withinPrimaryContainer = true;
+    if (ancestor !== candidate && EXCLUDED_PRICE_CONTEXT.test(`${ancestor.id || ""} ${classNames(ancestor)}`)) return false;
+  }
+  return withinPrimaryContainer;
+}
+
+function classNames(node) {
+  const classes = node?.classList;
+  if (!classes || !Number.isInteger(classes.length) || typeof classes.item !== "function") return "";
+  return Array.from({ length: classes.length }, (_, index) => classes.item(index) || "").join(" ");
+}
+
+function extractPayablePriceFallback(doc, primaryContainer) {
+  const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
+  if (candidates.length > 1) return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+  const candidate = candidates[0];
+  if (!isQualifiedPayablePrice(candidate, primaryContainer)) {
+    return { status: "failure", errorCode: "PRICE_MISSING" };
+  }
+  const priceTry = parseTurkishPrice(candidate.textContent);
+  return priceTry === null
+    ? { status: "failure", errorCode: "PRICE_UNRECOGNIZED" }
+    : { status: "success", priceTry };
 }
 
 export function parseTurkishPrice(value) {
@@ -45,7 +76,8 @@ export function extractPrimaryPrice(doc) {
   if (/amazon sign.in|giriş yap/i.test(title) && doc.querySelector("#ap_email")) {
     return { status: "failure", errorCode: "AUTH_REQUIRED" };
   }
-  if (!doc.querySelector("#corePrice_feature_div")) {
+  const primaryContainer = doc.querySelector("#corePrice_feature_div");
+  if (!primaryContainer) {
     return { status: "failure", errorCode: "HTML_STRUCTURE" };
   }
   const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)].filter(candidate => !isUnitPriceCandidate(candidate));
@@ -53,7 +85,7 @@ export function extractPrimaryPrice(doc) {
     return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
   }
   if (candidates.length === 0 || !candidates[0].textContent?.trim()) {
-    return { status: "failure", errorCode: "PRICE_MISSING" };
+    return extractPayablePriceFallback(doc, primaryContainer);
   }
   const priceTry = parseTurkishPrice(candidates[0].textContent);
   return priceTry === null

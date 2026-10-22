@@ -68,12 +68,18 @@ function fixture(html) {
       if (selector === "#corePrice_feature_div") return findById("corePrice_feature_div");
       if (selector === "#ap_email") return findById("ap_email");
       if (selector === "#productTitle") return findById("productTitle");
+      if (selector === "#apex-pricetopay-accessibility-label") return findById("apex-pricetopay-accessibility-label");
       throw new Error("Unexpected selector: " + selector);
     },
     querySelectorAll(selector) {
-      assert.equal(selector, "#corePrice_feature_div .a-offscreen");
-      const core = findById("corePrice_feature_div");
-      return core ? findAll(core, node => node.classList.contains("a-offscreen")) : [];
+      if (selector === "#corePrice_feature_div .a-offscreen") {
+        const core = findById("corePrice_feature_div");
+        return core ? findAll(core, node => node.classList.contains("a-offscreen")) : [];
+      }
+      if (selector === "#apex-pricetopay-accessibility-label") {
+        return findAll(root, node => node.id === "apex-pricetopay-accessibility-label");
+      }
+      throw new Error("Unexpected selector: " + selector);
     }
   };
 }
@@ -82,8 +88,63 @@ test("normalizes Turkish TRY with separators, rejecting ambiguous or non-TRY tex
   assert.equal(parseTurkishPrice("36.399,00TL"), 36399);
   assert.equal(parseTurkishPrice("₺ 1.234,50"), 1234.5);
   assert.equal(parseTurkishPrice("1.234,50\u00a0TL"), 1234.5);
+  assert.equal(parseTurkishPrice("  194,74 TL  "), 194.74);
+  assert.equal(parseTurkishPrice("194,74\u202fTL"), 194.74);
   for (const price of ["1,234.50 TL", "36.399 TL", "36.399,00 USD", "0,00TL", "1.23,00TL", "36.399,00 TL / ay", "36.399,00"]) {
     assert.equal(parseTurkishPrice(price), null, price);
+  }
+});
+
+test("uses the uniquely identified payable-price label only inside the primary purchase container", () => {
+  const doc = fixture(`<div id="corePrice_feature_div"><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 194.74 });
+});
+
+test("keeps primary price authoritative when a payable-price label is also present", () => {
+  const doc = fixture(`<div id="corePrice_feature_div"><span class="a-offscreen">210,00 TL</span><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 210 });
+});
+
+test("does not use payable-price fallback to override primary ambiguity or unrecognized text", () => {
+  const ambiguous = fixture(`<div id="corePrice_feature_div"><span class="a-offscreen">210,00 TL</span><span class="a-offscreen">211,00 TL</span><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`);
+  const unrecognized = fixture(`<div id="corePrice_feature_div"><span class="a-offscreen">Fiyat için seçenekleri görün</span><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`);
+  assert.deepEqual(extractPrimaryPrice(ambiguous), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+  assert.deepEqual(extractPrimaryPrice(unrecognized), { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
+});
+
+test("never uses the payable-price fallback on bot, access-denied, or authentication pages", () => {
+  for (const html of [
+    `<title>Robot Check</title><div id="corePrice_feature_div"><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`,
+    `<title>Access Denied</title><div id="corePrice_feature_div"><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`,
+    `<title>Amazon Sign-In</title><input id="ap_email"><div id="corePrice_feature_div"><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`
+  ]) assert.notEqual(extractPrimaryPrice(fixture(html)).status, "success");
+});
+
+test("preserves HTML_STRUCTURE and PRICE_MISSING when no qualified fallback exists", () => {
+  assert.deepEqual(extractPrimaryPrice(fixture(`<span id="apex-pricetopay-accessibility-label">194,74 TL</span>`)),
+    { status: "failure", errorCode: "HTML_STRUCTURE" });
+  assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div"></div>`)),
+    { status: "failure", errorCode: "PRICE_MISSING" });
+});
+
+test("fails safely for conflicting payable-price labels and ignores unqualified alternatives", () => {
+  const multiple = fixture(`<div id="corePrice_feature_div"><span id="apex-pricetopay-accessibility-label">194,74 TL</span><span id="apex-pricetopay-accessibility-label">199,00 TL</span></div>`);
+  const unrelated = fixture(`<div id="corePrice_feature_div"></div><div class="recommendation"><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div>`);
+  assert.deepEqual(extractPrimaryPrice(multiple), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+  assert.deepEqual(extractPrimaryPrice(unrelated), { status: "failure", errorCode: "PRICE_MISSING" });
+});
+
+test("rejects payable-price labels in unit-price, coupon, shipping, discount, installment, used, recommendation, and format contexts", () => {
+  for (const context of ["apex-priceperunit", "coupon", "shipping", "discount", "installment", "used-offer", "recommendation", "alternative-format"]) {
+    const doc = fixture(`<div id="corePrice_feature_div"><div class="${context}"><span id="apex-pricetopay-accessibility-label">194,74 TL</span></div></div>`);
+    assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_MISSING" }, context);
+  }
+});
+
+test("rejects malformed and non-TRY fallback values without guessing", () => {
+  for (const value of ["194,74 USD", "194.74 TL", "0,00 TL", "194,74 TL / ay", "194 TL", "price: 194,74 TL"]) {
+    const doc = fixture(`<div id="corePrice_feature_div"><span id="apex-pricetopay-accessibility-label">${value}</span></div>`);
+    assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_UNRECOGNIZED" }, value);
   }
 });
 
