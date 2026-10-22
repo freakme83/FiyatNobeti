@@ -31,6 +31,16 @@ const inFlightChecks = new Map();
 const productInstances = new Map();
 let nextProductInstance = 0;
 let automaticRun;
+let developerEventRecorder;
+
+export function setDeveloperEventRecorderForDev(record) {
+  developerEventRecorder = typeof record === "function" ? record : undefined;
+}
+
+function recordDeveloperEvent(event) {
+  try { developerEventRecorder?.(event)?.catch?.(() => {}); }
+  catch { /* Developer diagnostics cannot affect normal checks. */ }
+}
 
 function shortLinkDiagnostics(error) {
   const diagnostics = {};

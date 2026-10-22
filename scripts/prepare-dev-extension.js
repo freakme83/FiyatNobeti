@@ -17,9 +17,15 @@ const RUNTIME_FILES = [
 const DEV_BACKGROUND_SOURCE = `import {
   prepareAutomaticAlarmTestForDev,
   runAutomaticAlarmTestForDev,
-  runOneAutomaticCheckForDev
+  runOneAutomaticCheckForDev,
+  setDeveloperEventRecorderForDev
 } from "./background.js";
 import { installDeveloperAutomaticAlarmTest } from "./dev-automatic-alarm.js";
+import { installDeveloperObservability } from "./dev-observability.js";
+
+const observability = installDeveloperObservability({ chromeApi: chrome });
+setDeveloperEventRecorderForDev(observability.record);
+observability.record({ type: "service_worker_started" });
 
 const alarmTest = installDeveloperAutomaticAlarmTest({
   chromeApi: chrome,
@@ -31,7 +37,8 @@ Object.defineProperty(globalThis, "fiyatNobetiDev", {
   value: Object.freeze({
     runOneAutomaticCheck: runOneAutomaticCheckForDev,
     scheduleOneAutomaticCheckTest: alarmTest.scheduleOneAutomaticCheckTest,
-    getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest
+    getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest,
+    getAutomaticCheckDiagnostics: observability.getAutomaticCheckDiagnostics
   }),
   enumerable: true,
   configurable: false,
@@ -52,6 +59,7 @@ export async function prepareDevExtension(root = defaultRoot) {
     await cp(join(sourceRoot, path), join(target, path), { recursive: true });
   }
   await cp(join(sourceRoot, "scripts/dev-automatic-alarm.js"), join(target, "dev-automatic-alarm.js"));
+  await cp(join(sourceRoot, "scripts/dev-observability.js"), join(target, "dev-observability.js"));
   await writeFile(join(target, "background.dev.js"), DEV_BACKGROUND_SOURCE);
 
   const manifestPath = join(target, "manifest.json");
