@@ -1,6 +1,6 @@
 # FiyatNöbeti
 
-Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını elle veya yaklaşık üç saatte bir kontrol eden deneysel Chrome Manifest V3 uzantısı. Bildirimler ve fiyat geçmişi bu sürümde yoktur.
+Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını elle veya yaklaşık üç saatte bir kontrol eden deneysel Chrome Manifest V3 uzantısı. Gerçek ürün kontrolleri otomatik bildirim üretmez; sistem bildirimi yalnızca geliştirici paketindeki açık sentetik test komutuyla denenebilir.
 
 ## Yükleme
 
@@ -19,6 +19,16 @@ For Windows testers who cannot install Node.js, use the ready-to-load GitHub Act
 5. Use FiyatNöbeti normally. For diagnostics, open the extension's service worker **Inspect** console and use the developer commands documented below.
 
 The standard package is also available as the `fiyatnobeti-standard` artifact. Chrome cannot load an extension directly from a ZIP, so the package must be extracted first. Artifacts may require GitHub sign-in and are retained for 14 days. Developers can continue to generate a local package with `npm run dev:prepare`.
+
+## Developer-only synthetic notification test
+
+Download the `fiyatnobeti-developer` artifact from a successful **Build extension test packages** Actions run for this PR branch. If no run exists, use **Actions → Build extension test packages → Run workflow**, select `feat/notification-infrastructure` in the branch selector, and start the workflow. Extract the wrapper ZIP and its `fiyatnobeti-developer.zip`; load the extracted folder containing `manifest.json` at `chrome://extensions`. On the FiyatNöbeti developer extension, open **Service Worker → Inspect** and run:
+
+```js
+await globalThis.fiyatNobetiDev.testPriceDropNotification()
+```
+
+This explicit command creates one notification for the fixed `SYNTHETIC NOTIFICATION TEST` fixture (₺1.000,00 → ₺800,00, −₺200,00, %20). It does not add a product, change watchlist or price data, schedule alarms, fetch a URL, or run automatically. The command is absent from the standard extension. The `notifications` permission is required. A `created` result and returned Chrome notification ID confirm that Chrome accepted creation; operating-system notification settings, focus modes, and platform behavior can still suppress a desktop banner. If no banner appears, inspect notification permission in Chrome and check operating-system notification and focus settings. This is presentation-only infrastructure: real product checks do not trigger notifications.
 
 ## Yerel izleme listesi
 

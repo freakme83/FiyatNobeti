@@ -13,6 +13,7 @@ const RUNTIME_FILES = [
   "popup.css",
   "popup.html",
   "popup.js",
+  "icons",
   "src"
 ];
 const DEVELOPER_FILES = [
@@ -20,7 +21,8 @@ const DEVELOPER_FILES = [
   "dev-automatic-alarm.js",
   "dev-observability.js",
   "offscreen.dev.js",
-  "scripts/dev-price-response.js"
+  "scripts/dev-price-response.js",
+  "scripts/dev-price-drop-notification.js"
 ];
 
 async function listFiles(directory, root = directory) {
@@ -54,8 +56,8 @@ async function validatePackage(directory, kind) {
 
   const expected = new Set();
   for (const path of RUNTIME_FILES) {
-    if (path === "src") {
-      for (const file of await listFiles(join(sourceRoot, "src"), join(sourceRoot, "src"))) expected.add(`src/${file}`);
+    if (path === "src" || path === "icons") {
+      for (const file of await listFiles(join(sourceRoot, path), join(sourceRoot, path))) expected.add(`${path}/${file}`);
     } else expected.add(path);
   }
   if (kind === "developer") {
@@ -67,6 +69,7 @@ async function validatePackage(directory, kind) {
     assert(manifest.background.service_worker === "background.js", "STANDARD_WRONG_SERVICE_WORKER");
     assert(!files.has("background.dev.js") && !files.has("offscreen.dev.js"), "STANDARD_HAS_DEV_ENTRY_POINT");
     assert(!files.has("dev-automatic-alarm.js") && !files.has("dev-observability.js"), "STANDARD_HAS_DEV_MODULE");
+    assert(!files.has("scripts/dev-price-drop-notification.js"), "STANDARD_HAS_DEV_NOTIFICATION_TEST");
     assert(![...files].some(path => path.startsWith("scripts/")), "STANDARD_HAS_DEV_SCRIPT");
     const original = JSON.parse(await readFile(join(sourceRoot, "manifest.json"), "utf8"));
     assert(JSON.stringify(manifest) === JSON.stringify(original), "STANDARD_MANIFEST_CHANGED");
@@ -75,6 +78,7 @@ async function validatePackage(directory, kind) {
     assert(files.has("background.dev.js") && files.has("offscreen.dev.js"), "DEVELOPER_ENTRY_POINT_MISSING");
     assert(files.has("dev-automatic-alarm.js") && files.has("dev-observability.js"), "DEVELOPER_DIAGNOSTICS_MISSING");
     assert(files.has("scripts/dev-price-response.js"), "DEVELOPER_PRICE_DIAGNOSTICS_MISSING");
+    assert(files.has("scripts/dev-price-drop-notification.js"), "DEVELOPER_NOTIFICATION_TEST_MISSING");
     const html = await readFile(join(directory, "offscreen.html"), "utf8");
     assert(html.includes('src="offscreen.dev.js"'), "DEVELOPER_WRONG_OFFSCREEN_ENTRY_POINT");
   }
