@@ -25,7 +25,7 @@ function isUnitPriceCandidate(candidate) {
 }
 
 function isQualifiedPayablePrice(candidate, primaryContainer) {
-  if (!candidate || candidate.tagName !== "span") return false;
+  if (candidate?.tagName?.toLowerCase() !== "span") return false;
   let withinPrimaryContainer = false;
   for (let ancestor = candidate; ancestor; ancestor = ancestor.parentElement) {
     if (ancestor === primaryContainer) withinPrimaryContainer = true;

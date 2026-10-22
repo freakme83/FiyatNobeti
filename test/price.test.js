@@ -11,7 +11,7 @@ function fixture(html) {
     const children = [];
     let ownText = "";
     return {
-      tagName,
+      tagName: tagName.toUpperCase(),
       id: attributes.id || "",
       parentElement,
       children,
@@ -36,7 +36,7 @@ function fixture(html) {
     }
     const close = /^<\s*\/\s*([\w-]+)/.exec(token);
     if (close) {
-      const index = stack.map(node => node.tagName).lastIndexOf(close[1].toLowerCase());
+      const index = stack.map(node => node.tagName.toLowerCase()).lastIndexOf(close[1].toLowerCase());
       if (index > 0) stack.length = index;
       continue;
     }
@@ -62,7 +62,7 @@ function fixture(html) {
   const findById = id => findAll(root, node => node.id === id)[0] || null;
   const body = findById("body");
   return {
-    title: findAll(root, node => node.tagName === "title")[0]?.textContent || "",
+    title: findAll(root, node => node.tagName.toLowerCase() === "title")[0]?.textContent || "",
     body: body || { textContent: root.textContent },
     querySelector(selector) {
       if (selector === "#corePrice_feature_div") return findById("corePrice_feature_div");
