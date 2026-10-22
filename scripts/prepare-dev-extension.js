@@ -71,7 +71,7 @@ export async function prepareDevExtension(root = defaultRoot) {
 
   const manifestPath = join(target, "manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  manifest.name = "FiyatNöbeti (Geliştirici)";
+  manifest.name = "FiyatNöbeti (Dev PR #8)";
   manifest.background.service_worker = "background.dev.js";
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   return target;
