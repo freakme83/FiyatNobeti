@@ -2,6 +2,7 @@ import { parseAmazonInput } from "./src/url.js";
 import { errorMessage, renderProductRows } from "./src/watchlist-view.js";
 import { createPermissionOnboarding } from "./src/permission-onboarding.js";
 import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
+import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
@@ -22,6 +23,12 @@ const autoStatus = document.querySelector("#auto-status");
 
 let watchlist = { version: 1, products: {} };
 const busyAsins = new Set();
+const busyRemovalAsins = new Set();
+const watchlistSync = createPopupWatchlistSync(chrome.storage, updatedWatchlist => {
+  watchlist = updatedWatchlist;
+  render();
+});
+window.addEventListener("unload", () => watchlistSync.dispose(), { once: true });
 
 async function loadAutoSettings() {
   const result = await chrome.runtime.sendMessage({ type: "GET_AUTO_SETTINGS" });
@@ -56,16 +63,19 @@ function render() {
   for (const button of productList.querySelectorAll('[data-action="check"]')) {
     button.disabled = busyAsins.has(button.dataset.asin);
   }
+  for (const button of productList.querySelectorAll('[data-action="remove"]')) {
+    button.disabled = busyRemovalAsins.has(button.dataset.asin);
+  }
 }
 
 async function loadWatchlist() {
+  const read = watchlistSync.beginRead();
   const response = await chrome.runtime.sendMessage({ type: "GET_WATCHLIST" });
   if (response?.status === "success" && response.watchlist?.version === 1) {
-    watchlist = response.watchlist;
-    render();
+    watchlistSync.applyIfCurrent(read, response.watchlist);
     return true;
   }
-  status.textContent = errorMessage(response?.errorCode || "STORAGE_ERROR");
+  if (watchlistSync.isCurrent(read)) status.textContent = errorMessage(response?.errorCode || "STORAGE_ERROR");
   return false;
 }
 
@@ -98,13 +108,13 @@ form.addEventListener("submit", async event => {
       updateShortLinkNotice();
       return;
     }
+    const addWatchlistRead = watchlistSync.beginRead();
     const result = await chrome.runtime.sendMessage({ type: "ADD_PRODUCT", url: input.value });
     if (result?.status === "duplicate") {
       status.textContent = "Bu ürün zaten izleme listenizde.";
     } else if (result?.status === "added") {
-      if (result.watchlist?.version === 1) watchlist = result.watchlist;
+      if (result.watchlist?.version === 1) watchlistSync.applyIfCurrent(addWatchlistRead, result.watchlist);
       else await loadWatchlist();
-      render();
       const product = watchlist.products[result.asin];
       if (product?.canonicalUrl) input.value = product.canonicalUrl;
       status.textContent = result.check?.status === "success"
@@ -126,15 +136,21 @@ productList.addEventListener("click", async event => {
   if (!button) return;
   const { action, asin } = button.dataset;
   if (action === "remove") {
-    button.disabled = true;
+    if (busyRemovalAsins.has(asin)) return;
+    busyRemovalAsins.add(asin);
+    const removalRead = watchlistSync.beginRead();
+    render();
     try {
       const result = await chrome.runtime.sendMessage({ type: "REMOVE_PRODUCT", asin });
       if (result?.status === "success") {
-        watchlist = result.watchlist;
-        render();
+        watchlistSync.applyIfCurrent(removalRead, result.watchlist);
         status.textContent = "Ürün izleme listesinden kaldırıldı.";
       } else showFailure(result);
     } catch { status.textContent = "Ürün kaldırılamadı. Tekrar deneyin."; }
+    finally {
+      busyRemovalAsins.delete(asin);
+      render();
+    }
     return;
   }
   if (action !== "check" || busyAsins.has(asin)) return;
