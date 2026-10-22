@@ -32,6 +32,9 @@ const productInstances = new Map();
 let nextProductInstance = 0;
 let automaticRun;
 let developerEventRecorder;
+let pendingAutomaticAlarm;
+let recoveryFailed = false;
+let startupRecovery;
 
 export function setDeveloperEventRecorderForDev(record) {
   developerEventRecorder = typeof record === "function" ? record : undefined;
@@ -453,6 +456,16 @@ async function scheduleAutomaticLocked(now = Date.now()) {
   const rawDue = Math.max(earliestDue, timestampMs(state.notBefore) ?? 0);
   const existing = await chrome.alarms.get(AUTO_ALARM_NAME);
   const previous = timestampMs(state.nextRunAt);
+  const deliveredAt = timestampMs(pendingAutomaticAlarm?.scheduledAt);
+  const deliveryIsPending = settings.enabled && deliveredAt !== null && previous !== null &&
+    Math.abs(previous - deliveredAt) < 1000 && deliveredAt <= now + 1000 &&
+    products[0]?.dueAt <= now && (timestampMs(state.notBefore) ?? 0) <= now;
+  // Chrome consumes one-shot alarms before waking a cold service worker. Keep
+  // the persisted due time intact while that exact delivery is being handled.
+  if (deliveryIsPending) {
+    await saveAutoState(state);
+    return { settings, state };
+  }
   const alarmMatchesState = existing && previous !== null && Math.abs(existing.scheduledTime - previous) < 1000;
   const stillAppropriate = previous !== null && previous >= rawDue - 1000 &&
     previous <= Math.max(rawDue, now) + AUTO_PACE_MS + 1000;
@@ -498,16 +511,9 @@ async function setAutoEnabled(enabled) {
   });
 }
 
-async function runAutomaticAlarm() {
+async function runAutomaticAlarm(deliveredAlarm) {
   if (automaticRun) {
     recordDeveloperEvent({ type: "automatic_check_skipped", outcome: "busy", errorCode: "AUTOMATIC_CHECK_RUNNING", requestStarted: false });
-    await withWatchlistLock(async () => {
-      const state = await readAutoState();
-      state.notBefore = new Date(Date.now() + AUTO_PACE_MS).toISOString();
-      state.nextRunAt = null;
-      await saveAutoState(state);
-      await scheduleAutomaticLocked();
-    });
     return;
   }
   automaticRun = (async () => {
@@ -519,7 +525,10 @@ async function runAutomaticAlarm() {
         return null;
       }
       const now = Date.now();
-      if (timestampMs(state.nextRunAt) === null || now + 1000 < timestampMs(state.nextRunAt)) {
+      const scheduledAt = Number.isFinite(deliveredAlarm?.scheduledTime) ? deliveredAlarm.scheduledTime : null;
+      const storedScheduledAt = timestampMs(state.nextRunAt);
+      if (scheduledAt === null || storedScheduledAt === null ||
+          Math.abs(storedScheduledAt - scheduledAt) >= 1000 || now + 1000 < scheduledAt) {
         await scheduleAutomaticLocked(now);
         return null;
       }
@@ -575,10 +584,6 @@ async function runAutomaticAlarm() {
   try { await automaticRun; }
   finally { automaticRun = undefined; }
 }
-
-let recoveryFailed = false;
-const startupRecovery = recoverInterruptedChecks().catch(() => { recoveryFailed = true; });
-startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});
 
 function devDiagnostic(result, asin = null) {
   return {
@@ -754,12 +759,24 @@ export async function runAutomaticAlarmTestForDev({ asin, productAddedAt } = {})
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== AUTO_ALARM_NAME) return;
+  pendingAutomaticAlarm = Number.isFinite(alarm.scheduledTime) ? { scheduledAt: new Date(alarm.scheduledTime).toISOString() } : undefined;
   recordDeveloperEvent({ type: "automatic_alarm_delivered", alarmName: AUTO_ALARM_NAME,
     ...(Number.isFinite(alarm.scheduledTime) ? { scheduledAt: new Date(alarm.scheduledTime).toISOString() } : {}) });
-  return startupRecovery.then(() => { if (!recoveryFailed) return runAutomaticAlarm(); }).catch(() => {});
+  const delivery = pendingAutomaticAlarm;
+  return startupRecovery.then(() => { if (!recoveryFailed) return runAutomaticAlarm(alarm); }).catch(() => {})
+    .finally(async () => {
+      if (pendingAutomaticAlarm === delivery) pendingAutomaticAlarm = undefined;
+      if (!recoveryFailed && !automaticRun) {
+        try { await reconcileAutomaticSchedule(); } catch { /* A later recovery event can restore the alarm. */ }
+      }
+    });
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  return startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
   return startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});
 });
 
@@ -786,3 +803,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .catch(() => sendResponse({ status: "failure", errorCode: "STORAGE_ERROR" }));
   return true;
 });
+
+// Register all wake-up handlers before startup recovery can reconcile state.
+// If a consumed one-shot alarm is delivered during this worker's cold start,
+// its synchronous listener records the delivery before reconciliation runs.
+startupRecovery = recoverInterruptedChecks().catch(() => { recoveryFailed = true; });
+startupRecovery.then(() => { if (!recoveryFailed) return reconcileAutomaticSchedule(); }).catch(() => {});

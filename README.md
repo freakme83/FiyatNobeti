@@ -141,6 +141,14 @@ Bu eski komut kontrolü hemen başlatır ve alarm teslimini sınamaz. Her iki ge
 
 Tek kayıtlık tanı `chrome.storage.local` içindeki `fiyatnobetiDeveloperAutomaticAlarmTest` anahtarında tutulur; HTML, yanıt gövdesi veya çerez saklanmaz. Test alarmının adı `fiyatnobeti:dev:automatic-check-test:<testId>` biçimindedir ve üretim alarmından ayrıdır. Bekleyen test servis çalışanı yeniden başlasa da korunur; `running` durumda kesilen test `interrupted` olur ve tekrar istek başlatmaz.
 
+### Üretim alarmının soğuk başlangıç doğrulaması
+
+Bu doğrulama için PR dalındaki **FiyatNöbeti (Dev PR #8)** paketini kullanın: GitHub'da **Actions → Build extension test packages → Run workflow** yolunu açın, dal olarak `fix/automatic-alarm-cold-start` seçin ve çalıştırın. Başarılı çalıştırmanın `fiyatnobeti-developer` artifact'ini indirip açın; içindeki klasörü `chrome://extensions` üzerinden **Load unpacked** ile yükleyin. Ürün ekleyin, Amazon iznini verin ve otomatik kontrolün açık olduğunu doğrulayın.
+
+Hemen yapılabilen kontroller: Servis çalışanı konsolunda `await chrome.alarms.get("fiyatnobeti:automatic-price-check")` ile gelecekteki alarmı inceleyin, Chrome'u yeniden başlatın ve alarmın korunduğunu veya yeniden kurulduğunu doğrulayın. Otomatik kontrolü kapatıp alarmın kaldırıldığını ve yeniden açınca uygun takvimin kurulduğunu da kontrol edin. Başlangıç veya yeniden başlatma tek başına Amazon isteği başlatmamalıdır. Chrome'u çalışır halde bırakıp DevTools'u kapatarak servis çalışanının uykuya geçmesine izin verin.
+
+Soğuk servis çalışanından **gerçek üretim alarmı** teslimini doğrulamak için ürünün son denemesinden itibaren doğal altı saatlik uygunluk süresini bekleyin; geliştirme bypass komutları veya kısa test alarmı bu doğrulamanın yerine geçmez. Teslimden sonra servis çalışanı **İncele** konsolunu açıp `await globalThis.fiyatNobetiDev.getAutomaticCheckDiagnostics()` çalıştırın. Alarmın planlama, teslim, istek başlangıcı ve bitiş olaylarının sırasını; aynı teslim için tek istek olduğunu; ürünün son başarılı fiyatının hata halinde korunduğunu kontrol edin. Aynı testi tarayıcıyı normal biçimde yeniden başlattıktan sonra bir sonraki doğal uygunlukta tekrarlayın. Chrome alarmı uyku, kapalı tarayıcı veya işletim sistemi koşullarında gecikebilir; altı saat tam zamanında teslim garantisi değildir. Comet'te aynı adımlar, uzantı ve MV3 alarm API'leri destekleniyorsa denenebilir.
+
 Standart sürüme dönmek için geliştirici yüklemesini uzantı ekranından kaldırın ve depo kök klasörünü yeniden paketlenmemiş uzantı olarak yükleyin. `.fiyatnobeti-dev` klasörü istenirse silinebilir. Doğal test alarmının gerçek Chrome veya Comet teslimi ayrıca elle doğrulanmalıdır; otomatik testler alarm olayını, API'leri, saati ve ağı taklit eder.
 
 ### Geliştirici fiyat yanıtı ve otomatik kontrol tanıları

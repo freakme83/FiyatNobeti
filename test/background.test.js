@@ -21,6 +21,7 @@ let parseHandler;
 let permissionChecks = [];
 let alarmListener;
 let installedListener;
+let startupListener;
 const alarms = new Map();
 const alarmCreations = [];
 globalThis.chrome = {
@@ -28,6 +29,7 @@ globalThis.chrome = {
     id: "test-extension",
     onMessage: { addListener(fn) { listener = fn; } },
     onInstalled: { addListener(fn) { installedListener = fn; } },
+    onStartup: { addListener(fn) { startupListener = fn; } },
     async sendMessage(message) {
       assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG"].includes(message.type));
       assert.match(message.html, /corePrice_feature_div/);
@@ -74,10 +76,10 @@ const {
   setDeveloperEventRecorderForDev
 } = await import("../background.js");
 assert.equal(globalThis.fiyatNobetiDev, undefined);
-const productionListeners = { listener, alarmListener, installedListener };
+const productionListeners = { listener, alarmListener, installedListener, startupListener };
 
 function useProductionBackground() {
-  ({ listener, alarmListener, installedListener } = productionListeners);
+  ({ listener, alarmListener, installedListener, startupListener } = productionListeners);
 }
 
 function enableDeveloperTestApi() {
