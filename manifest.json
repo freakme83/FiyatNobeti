@@ -3,7 +3,7 @@
   "name": "FiyatNöbeti",
   "version": "0.1.0",
   "description": "Amazon Türkiye ürünleri için yerel fiyat izleme listesi.",
-  "permissions": ["storage", "offscreen", "alarms"],
+  "permissions": ["storage", "offscreen", "alarms", "notifications"],
   "optional_host_permissions": [
     "https://www.amazon.com.tr/*",
     "https://amzn.eu/*"

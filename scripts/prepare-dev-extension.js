@@ -12,6 +12,7 @@ const RUNTIME_FILES = [
   "popup.css",
   "popup.html",
   "popup.js",
+  "icons",
   "src"
 ];
 const DEV_BACKGROUND_SOURCE = `import {
@@ -23,6 +24,7 @@ const DEV_BACKGROUND_SOURCE = `import {
 } from "./background.js";
 import { installDeveloperAutomaticAlarmTest } from "./dev-automatic-alarm.js";
 import { installDeveloperObservability } from "./dev-observability.js";
+import { installDeveloperPriceDropNotificationTest } from "./scripts/dev-price-drop-notification.js";
 
 const observability = installDeveloperObservability({ chromeApi: chrome });
 setDeveloperEventRecorderForDev(observability.record);
@@ -33,6 +35,7 @@ const alarmTest = installDeveloperAutomaticAlarmTest({
   prepareTarget: prepareAutomaticAlarmTestForDev,
   runTarget: runAutomaticAlarmTestForDev
 });
+const notificationTest = installDeveloperPriceDropNotificationTest({ chromeApi: chrome });
 
 Object.defineProperty(globalThis, "fiyatNobetiDev", {
   value: Object.freeze({
@@ -40,7 +43,8 @@ Object.defineProperty(globalThis, "fiyatNobetiDev", {
     scheduleOneAutomaticCheckTest: alarmTest.scheduleOneAutomaticCheckTest,
     getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest,
     getAutomaticCheckDiagnostics: observability.getAutomaticCheckDiagnostics,
-    diagnoseProduct: diagnoseProductForDev
+    diagnoseProduct: diagnoseProductForDev,
+    testPriceDropNotification: notificationTest.testPriceDropNotification
   }),
   enumerable: true,
   configurable: false,
@@ -63,6 +67,7 @@ export async function prepareDevExtension(root = defaultRoot) {
   await cp(join(sourceRoot, "scripts/dev-automatic-alarm.js"), join(target, "dev-automatic-alarm.js"));
   await cp(join(sourceRoot, "scripts/dev-observability.js"), join(target, "dev-observability.js"));
   await mkdir(join(target, "scripts"));
+  await cp(join(sourceRoot, "scripts/dev-price-drop-notification.js"), join(target, "scripts/dev-price-drop-notification.js"));
   await cp(join(sourceRoot, "scripts/dev-price-response.js"), join(target, "scripts/dev-price-response.js"));
   await writeFile(join(target, "background.dev.js"), DEV_BACKGROUND_SOURCE);
   await writeFile(join(target, "offscreen.dev.js"), 'import "./offscreen.js";\nimport { installDeveloperPriceParser } from "./scripts/dev-price-response.js";\ninstallDeveloperPriceParser();\n');

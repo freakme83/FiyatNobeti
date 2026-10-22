@@ -12,8 +12,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("production manifest excludes the developer console entry point", async () => {
   const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.permissions, ["storage", "offscreen", "alarms", "notifications"]);
   assert.equal(manifest.background.service_worker, "background.js");
   assert.notEqual(manifest.background.service_worker, "background.dev.js");
+  assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /chrome\.notifications|presentPriceDropNotification|testPriceDropNotification/);
   assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
   assert.equal((await readFile(resolve(root, "offscreen.html"), "utf8")).includes("offscreen.dev.js"), false);
   assert.equal((await readFile(resolve(root, "background.js"), "utf8")).includes("fiyatNobetiDev"), false);
@@ -31,6 +33,11 @@ test("developer preparation creates an isolated manifest that enables the consol
     assert.match(developerBackground, /getLastAutomaticAlarmTest/);
     assert.match(developerBackground, /diagnoseProduct: diagnoseProductForDev/);
     assert.match(developerBackground, /getAutomaticCheckDiagnostics/);
+    assert.match(developerBackground, /testPriceDropNotification: notificationTest\.testPriceDropNotification/);
+    assert.match(developerBackground, /installDeveloperPriceDropNotificationTest/);
+    assert.doesNotMatch(developerBackground, /notificationTest\.testPriceDropNotification\(\)/);
+    assert.equal(manifest.permissions.includes("notifications"), true);
+    assert.equal((await readFile(resolve(target, "scripts/dev-price-drop-notification.js"), "utf8")).includes("SYNTHETIC NOTIFICATION TEST"), true);
     assert.match(await readFile(resolve(target, "offscreen.html"), "utf8"), /offscreen.dev.js/);
     assert.match(await readFile(resolve(target, "offscreen.dev.js"), "utf8"), /installDeveloperPriceParser/);
     assert.match(await readFile(resolve(target, "dev-automatic-alarm.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
@@ -78,6 +85,8 @@ test("standard and developer ZIPs have loadable roots and only their runtime fil
     assert.equal(developerManifestResult.status, 0);
     assert.equal(JSON.parse(standardManifestResult.stdout).background.service_worker, "background.js");
     assert.equal(JSON.parse(developerManifestResult.stdout).background.service_worker, "background.dev.js");
+    assert.deepEqual(JSON.parse(standardManifestResult.stdout).permissions, ["storage", "offscreen", "alarms", "notifications"]);
+    assert.deepEqual(JSON.parse(developerManifestResult.stdout).permissions, ["storage", "offscreen", "alarms", "notifications"]);
     assert.equal(JSON.parse(await readFile(resolve(output, "developer/manifest.json"), "utf8")).manifest_version, 3);
     assert.equal(JSON.parse(await readFile(resolve(output, "standard/manifest.json"), "utf8")).manifest_version, 3);
   } finally {
