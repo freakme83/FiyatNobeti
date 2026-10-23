@@ -303,7 +303,7 @@ test("the preferences listener coexists with live watchlist updates and disposes
   const watchlistStates = [];
   const watchlistSync = createPopupWatchlistSync(storage.api, value => watchlistStates.push(value));
   await preferences.load();
-  storage.emit("watchlist", { version: 1, products: { B0D47HCRZ6: { title: "Live update" } } });
+  storage.emit("watchlist", { version: 2, products: { B0D47HCRZ6: { title: "Live update" } } });
   assert.equal(watchlistStates.length, 1);
   assert.equal(preferences.getState().preferences.enabled, true);
   preferences.dispose();

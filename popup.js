@@ -4,6 +4,7 @@ import { createPermissionOnboarding } from "./src/permission-onboarding.js";
 import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
 import { createPopupNotificationPreferences } from "./src/notification-preferences.js";
+import { createWatchlist, WATCHLIST_VERSION } from "./src/watchlist.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
@@ -27,7 +28,7 @@ const notifyOnIncrease = document.querySelector("#notify-on-increase");
 const notificationOptions = document.querySelector("#notification-options");
 const notificationStatus = document.querySelector("#notification-status");
 
-let watchlist = { version: 1, products: {} };
+let watchlist = createWatchlist();
 const busyAsins = new Set();
 const busyRemovalAsins = new Set();
 const watchlistSync = createPopupWatchlistSync(chrome.storage, updatedWatchlist => {
@@ -106,7 +107,7 @@ function render() {
 async function loadWatchlist() {
   const read = watchlistSync.beginRead();
   const response = await chrome.runtime.sendMessage({ type: "GET_WATCHLIST" });
-  if (response?.status === "success" && response.watchlist?.version === 1) {
+  if (response?.status === "success" && response.watchlist?.version === WATCHLIST_VERSION) {
     watchlistSync.applyIfCurrent(read, response.watchlist);
     return true;
   }
@@ -148,7 +149,7 @@ form.addEventListener("submit", async event => {
     if (result?.status === "duplicate") {
       status.textContent = "Bu ürün zaten izleme listenizde.";
     } else if (result?.status === "added") {
-      if (result.watchlist?.version === 1) watchlistSync.applyIfCurrent(addWatchlistRead, result.watchlist);
+      if (result.watchlist?.version === WATCHLIST_VERSION) watchlistSync.applyIfCurrent(addWatchlistRead, result.watchlist);
       else await loadWatchlist();
       const product = watchlist.products[result.asin];
       if (product?.canonicalUrl) input.value = product.canonicalUrl;

@@ -1,3 +1,6 @@
+import { compareWithBaseline } from "./price-comparison.js";
+import { priceCents } from "./watchlist.js";
+
 const ERROR_LABELS = {
   PERMISSION_REQUIRED: "Amazon Türkiye izni verilmedi.",
   SHORT_LINK_PERMISSION_REQUIRED: "Kısa Amazon bağlantısı izni verilmedi.",
@@ -60,17 +63,27 @@ export function createProductRow(doc, product) {
     textElement(doc, "p", "product-asin", product.asin)
   );
 
-  if (Number.isFinite(product.lastSuccessfulPriceTry) && product.lastSuccessfulPriceTry > 0) {
+  if (priceCents(product.lastSuccessfulPriceTry) !== null) {
     const fresh = product.lastCheckStatus === "success";
     row.append(
       textElement(doc, "p", "product-price-label", fresh ? "Son başarılı fiyat" : "Son başarılı fiyat · güncel değil"),
       textElement(doc, "p", "product-price", priceFormatter.format(product.lastSuccessfulPriceTry))
     );
+    const comparison = compareWithBaseline(product);
+    if (comparison) {
+      const tone = comparison.direction < 0 ? "decrease" : comparison.direction > 0 ? "increase" : "unchanged";
+      row.append(
+        textElement(doc, "p", `product-comparison ${tone}`, comparison.headline),
+        textElement(doc, "p", "product-comparison-detail", comparison.detail),
+        textElement(doc, "p", "product-meta", `${product.baselineSource === "migrated" ? "Referans (geçişteki son fiyat)" : "Başlangıç"}: ${comparison.baselineText} · ${timeLabel(product.baselineCheckedAt) || "tarih bilinmiyor"}`)
+      );
+    } else row.append(textElement(doc, "p", "product-meta", "Karşılaştırma henüz kullanılamıyor."));
     if (product.lastSuccessfulCheckAt) {
       row.append(textElement(doc, "p", "product-meta", `Başarılı kontrol: ${timeLabel(product.lastSuccessfulCheckAt)}`));
     }
   } else {
     row.append(textElement(doc, "p", "product-price-label", "Henüz fiyat alınamadı"));
+    row.append(textElement(doc, "p", "product-meta", "İlk geçerli fiyat bekleniyor."));
   }
 
   let statusText = "";

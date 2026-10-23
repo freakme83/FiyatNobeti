@@ -3,6 +3,7 @@ import { resolveAmazonShortLink } from "./src/shortlink.js";
 import {
   createProductRecord,
   createWatchlist,
+  establishFirstBaseline,
   normalizeProductTitle,
   normalizeWatchlist,
   WATCHLIST_KEY
@@ -253,7 +254,14 @@ function withWatchlistLock(task) {
 
 async function readWatchlist() {
   const stored = await chrome.storage.local.get([WATCHLIST_KEY, "lastCheck", "lastSuccess"]);
-  if (stored[WATCHLIST_KEY] !== undefined) return normalizeWatchlist(stored[WATCHLIST_KEY]);
+  if (stored[WATCHLIST_KEY] !== undefined) {
+    const watchlist = normalizeWatchlist(stored[WATCHLIST_KEY]);
+    if (stored[WATCHLIST_KEY].version === 1) {
+      // Commit the old price as the reference before any check can replace it.
+      await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+    }
+    return watchlist;
+  }
 
   const watchlist = createWatchlist();
   const success = stored.lastSuccess;
@@ -262,6 +270,9 @@ async function readWatchlist() {
       const record = createProductRecord({ asin: success.asin, canonicalUrl: success.canonicalUrl, title: success.title, addedAt: success.checkedAt });
       record.lastSuccessfulPriceTry = success.priceTry;
       record.lastSuccessfulCheckAt = success.checkedAt || null;
+      // The legacy single-product probe is also a migrated observation.
+      const migrated = normalizeWatchlist({ version: 1, products: { [record.asin]: record } });
+      Object.assign(record, migrated.products[record.asin]);
       record.lastAttemptedCheckAt = stored.lastCheck?.checkedAt || success.checkedAt || null;
       record.lastCheckStatus = stored.lastCheck?.status === "failure" ? "failure" : "success";
       record.lastErrorCode = stored.lastCheck?.status === "failure" ? stored.lastCheck.errorCode || null : null;
@@ -342,6 +353,7 @@ async function checkWatchlistProduct(asin, {
       product.lastAttemptedCheckAt = checkedAt;
       const previousPrice = product.lastSuccessfulPriceTry;
       if (fetched.status === "success") {
+        establishFirstBaseline(product, fetched.priceTry, checkedAt);
         product.lastSuccessfulPriceTry = fetched.priceTry;
         product.lastSuccessfulCheckAt = checkedAt;
         if (fetched.title) product.title = fetched.title;

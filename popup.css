@@ -42,6 +42,11 @@ button:disabled { opacity: .6; cursor: wait; }
 .product-asin, .product-meta { margin: 2px 0; color: #66737d; font-size: 11px; overflow-wrap: anywhere; }
 .product-price-label { margin: 6px 0 0; color: #53606c; font-size: 11px; }
 .product-price { margin: 0; font-size: 17px; font-weight: 750; }
+.product-comparison { margin: 2px 0 0; font-size: 14px; font-weight: 750; line-height: 1.3; }
+.product-comparison.decrease { color: #146b3a; }
+.product-comparison.increase { color: #a12626; }
+.product-comparison.unchanged { color: #40505c; }
+.product-comparison-detail { margin: 1px 0; font-size: 11px; color: #40505c; }
 .product-status { margin: 3px 0; font-size: 11px; }
 .product-status.error { color: #9f2927; }
 .product-actions { display: flex; gap: 8px; margin-top: 7px; }

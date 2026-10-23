@@ -20,7 +20,7 @@ function storageMock() {
 }
 
 function watchlist(productRecords = {}) {
-  return { version: 1, products: productRecords };
+  return { version: 2, products: productRecords };
 }
 
 function record(overrides = {}) {
@@ -33,6 +33,9 @@ function record(overrides = {}) {
     lastAttemptedCheckAt: "2026-10-21T12:00:00.000Z",
     lastCheckStatus: "success",
     lastErrorCode: null,
+    baselinePriceTry: 1200,
+    baselineCheckedAt: "2026-10-21T12:00:00.000Z",
+    baselineSource: "first",
     ...overrides
   };
 }
@@ -100,6 +103,27 @@ test("the existing renderer paints storage updates as text and preserves normal 
   assert.match(rowText, /Son kontrol başarısız/);
   assert.match(rowText, /Başarılı kontrol:/);
   assert.match(rowText, /Son deneme:/);
+  sync.dispose();
+});
+
+test("live storage updates repaint the fixed comparison independently of notification preferences", () => {
+  class Element {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = nodes; }
+  }
+  const doc = { createElement: tagName => new Element(tagName) };
+  const container = new Element("ul");
+  const storage = storageMock();
+  const sync = createPopupWatchlistSync(storage.api, value => renderProductRows(doc, container, value.products, { hidden: false }));
+  const paint = price => storage.emit({ watchlist: { newValue: watchlist({ B0D47HCRZ6: record({ lastSuccessfulPriceTry: price }) }) } });
+  const visible = () => container.children[0].children.map(child => child.textContent).join(" ");
+  paint(800);
+  assert.match(visible(), /↓ %33,33 daha ucuz/);
+  storage.emit({ notificationPreferences: { newValue: { enabled: false } } });
+  assert.match(visible(), /↓ %33,33 daha ucuz/);
+  paint(1350);
+  assert.match(visible(), /↑ %12,5 daha pahalı/);
   sync.dispose();
 });
 

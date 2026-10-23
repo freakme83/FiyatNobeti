@@ -352,8 +352,92 @@ test("adds a new product, runs an initial check, and persists the versioned watc
   assert.ok(item.lastSuccessfulCheckAt);
   assert.ok(item.lastAttemptedCheckAt);
   assert.ok(item.addedAt);
-  assert.equal(result.watchlist.version, 1);
+  assert.equal(result.watchlist.version, 2);
+  assert.equal(item.baselinePriceTry, 1298);
+  assert.equal(item.baselineCheckedAt, item.lastSuccessfulCheckAt);
+  assert.equal(item.baselineSource, "first");
   assert.deepEqual((await message("GET_WATCHLIST")).watchlist, stored.watchlist);
+});
+
+test("manual and automatic first successes establish independent fixed baselines", async () => {
+  useProductionBackground();
+  await withClock("2026-10-23T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    const manual = seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-23T11:00:00.000Z" });
+    const automatic = seedProduct("B0CQXKXBR7", { attemptedAt: "2026-10-23T06:00:00.000Z" });
+    assert.equal(manual.lastSuccessfulPriceTry, null);
+    assert.equal(automatic.lastSuccessfulPriceTry, null);
+    parseHandler = async html => ({ status: "success", priceTry: html.includes("B0CQXKXBR7") ? 1500 : 1000, title: "Test" });
+    fetchHandler = async url => htmlResponse(url.split("/").at(-1));
+    await installedListener();
+    assert.equal((await message("CHECK_PRODUCT", { asin: manual.asin })).status, "success");
+    const first = stored.watchlist.products[manual.asin];
+    assert.deepEqual([first.baselinePriceTry, first.baselineCheckedAt, first.baselineSource], [1000, first.lastSuccessfulCheckAt, "first"]);
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    const second = stored.watchlist.products[automatic.asin];
+    assert.deepEqual([second.baselinePriceTry, second.baselineCheckedAt, second.baselineSource], [1500, second.lastSuccessfulCheckAt, "first"]);
+    assert.equal(notificationCreations, 0);
+    assert.equal(fetchCount, 2);
+  });
+});
+
+test("legacy reference commits before a manual overwrite and survives failures and worker restart", async () => {
+  useProductionBackground();
+  await withClock("2026-10-23T12:00:00.000Z", async () => {
+    await resetWatchlist();
+    const old = seedSuccessfulProduct();
+    const oldTimestamp = old.lastSuccessfulCheckAt;
+    const oldAttempt = old.lastAttemptedCheckAt;
+    parseHandler = async () => ({ status: "success", priceTry: 800, title: "Test product" });
+    const result = await message("CHECK_PRODUCT", { asin: old.asin });
+    assert.equal(result.status, "success");
+    const current = stored.watchlist.products[old.asin];
+    assert.equal(stored.watchlist.version, 2);
+    assert.deepEqual([current.baselinePriceTry, current.baselineCheckedAt, current.baselineSource], [1000, oldTimestamp, "migrated"]);
+    assert.notEqual(current.lastAttemptedCheckAt, oldAttempt);
+    assert.equal(current.lastSuccessfulPriceTry, 800);
+    assert.equal(notificationCreations, 0);
+    const snapshot = structuredClone(stored.watchlist);
+    await import("../background.js?baseline-worker-restart");
+    await message("GET_WATCHLIST");
+    assert.deepEqual(stored.watchlist, snapshot);
+    fetchHandler = async () => new Response("Unavailable", { status: 503, headers: { "content-type": "text/html" } });
+    await message("CHECK_PRODUCT", { asin: old.asin });
+    assert.equal(stored.watchlist.products[old.asin].lastSuccessfulPriceTry, 800);
+    assert.equal(stored.watchlist.products[old.asin].baselinePriceTry, 1000);
+    assert.equal(stored.watchlist.products[old.asin].lastCheckStatus, "failure");
+  });
+});
+
+test("read-only legacy migration preserves existing history without requests or alarms", async () => {
+  useProductionBackground();
+  await resetWatchlist();
+  const old = seedSuccessfulProduct();
+  old.lastCheckStatus = "failure";
+  old.lastErrorCode = "HTTP_ERROR";
+  const before = structuredClone(old);
+  const result = await message("GET_WATCHLIST");
+  assert.equal(result.status, "success");
+  assert.equal(stored.watchlist.version, 2);
+  assert.equal(stored.watchlist.products[old.asin].baselinePriceTry, before.lastSuccessfulPriceTry);
+  assert.equal(stored.watchlist.products[old.asin].baselineCheckedAt, before.lastSuccessfulCheckAt);
+  for (const key of ["lastSuccessfulPriceTry", "lastSuccessfulCheckAt", "lastAttemptedCheckAt", "lastCheckStatus", "lastErrorCode", "addedAt"]) {
+    assert.equal(stored.watchlist.products[old.asin][key], before[key]);
+  }
+  assert.equal(fetchCount, 0);
+  assert.equal(notificationCreations, 0);
+  assert.equal(alarmCreations.length, 0);
+  const snapshot = structuredClone(stored.watchlist);
+  await message("GET_WATCHLIST");
+  assert.deepEqual(stored.watchlist, snapshot);
+
+  stored.watchlist.products[old.asin].baselinePriceTry = -1;
+  const invalid = await message("GET_WATCHLIST");
+  assert.equal(invalid.status, "failure");
+  assert.equal(invalid.errorCode, "WATCHLIST_UNSUPPORTED_VERSION");
+  assert.equal(fetchCount, 0);
+  assert.equal(alarmCreations.length, 0);
 });
 
 test("direct ASIN input uses the existing add flow and deduplicates against its canonical URL", async () => {
@@ -538,6 +622,8 @@ test("remove and re-add creates an independent check instance while discarding t
   const added = await readd;
   assert.equal(added.check.status, "success");
   assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 888);
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.baselinePriceTry, 888);
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.baselineSource, "first");
   assert.equal(stored.watchlist.products.B0D47HCRZ6.title, "New title");
 });
 
@@ -636,7 +722,10 @@ test("legacy settings and an obsolete six-hour alarm migrate without fetching or
 
     await installedListener();
     assert.deepEqual(stored.automaticChecks, { version: 1, enabled: true, intervalMinutes: 180 });
-    assert.deepEqual(stored.watchlist.products.B0D47HCRZ6, history);
+    assert.deepEqual({ ...stored.watchlist.products.B0D47HCRZ6, baselinePriceTry: null,
+      baselineCheckedAt: null, baselineSource: null }, history);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.baselinePriceTry, 12345);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.baselineSource, "migrated");
     assert.equal(requests, 0);
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_PACE_MS);
     advanceToAlarm(clock);
@@ -825,6 +914,8 @@ test("production alarms notify once for enabled directions, with three-hour sche
     assert.equal(notificationOptions.length, 1);
     assert.equal(notificationOptions[0].contextMessage, "Fiyat düşüşü");
     assert.equal(notificationOptions[0].message, "Yeni: ₺800,00 · Önceki: ₺1.000,00 · −₺200,00 (%20)");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.baselinePriceTry, 1000);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.baselineSource, "migrated");
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
     assert.equal(fetchCount, 1);
     await alarmListener(firstAlarm); // A stale duplicate delivery cannot repeat the event.
@@ -842,12 +933,14 @@ test("production alarms notify once for enabled directions, with three-hour sche
     assert.equal(notificationOptions.length, 2);
     assert.equal(notificationOptions[1].contextMessage, "Fiyat yükselişi");
     assert.equal(notificationOptions[1].message, "Yeni: ₺900,00 · Önceki: ₺860,00 · +₺40,00 (%4,65)");
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.baselinePriceTry, 1000);
 
     stored.notificationPreferences.enabled = false;
     price = 850;
     advanceToAlarm(clock);
     await fireAutomaticAlarm();
     assert.equal(notificationOptions.length, 2);
+    assert.equal(stored.watchlist.products.B0D47HCRZ6.baselinePriceTry, 1000);
     assert.equal(fetchCount, 4);
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
   });
