@@ -21,7 +21,7 @@ input[type="checkbox"]:disabled { cursor: default; }
 .notification-status:empty { display: none; }
 label { display: block; font-weight: 650; margin-bottom: 5px; }
 input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #a5b1bb; border-radius: 6px; font: inherit; }
-input:focus-visible, button:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
+input:focus-visible, button:focus-visible, .product-title a:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
 .notice { margin: 7px 0 0; color: #53606c; font-size: 11px; line-height: 1.4; }
 button { font: inherit; cursor: pointer; }
 #add-button { width: 100%; padding: 9px; margin-top: 8px; border: 0; border-radius: 6px; color: white; background: #146397; font-weight: 700; }
@@ -39,6 +39,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .product { padding: 10px 0; border-top: 1px solid #edf0f2; min-width: 0; }
 .product:first-child { border-top: 0; }
 .product-title { margin: 0; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.product-title a { color: #164e70; text-decoration: underline; text-underline-offset: 2px; }
 .product-asin, .product-meta { margin: 2px 0; color: #66737d; font-size: 11px; overflow-wrap: anywhere; }
 .product-price-label { margin: 6px 0 0; color: #53606c; font-size: 11px; }
 .product-price { margin: 0; font-size: 17px; font-weight: 750; }
