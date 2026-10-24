@@ -1,6 +1,6 @@
 # FiyatNöbeti
 
-Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını elle veya yaklaşık üç saatte bir kontrol eden deneysel Chrome Manifest V3 uzantısı. Gerçek ürün kontrolleri otomatik bildirim üretmez; sistem bildirimi yalnızca geliştirici paketindeki açık sentetik test komutuyla denenebilir.
+Amazon Türkiye ürünlerini yerel bir izleme listesine ekleyip fiyatlarını elle veya yaklaşık üç saatte bir kontrol eden deneysel Chrome Manifest V3 uzantısı. Başarılı otomatik kontrollerde önceki ve yeni başarılı fiyat farklıysa, kayıtlı tercihlere göre sistem bildirimi oluşturmayı dener.
 
 ## Yükleme
 
@@ -22,19 +22,23 @@ The standard package is also available as the `fiyatnobeti-standard` artifact. C
 
 ## Developer-only synthetic notification test
 
-Download the `fiyatnobeti-developer` artifact from a successful **Build extension test packages** Actions run for this PR branch. If no run exists, use **Actions → Build extension test packages → Run workflow**, select `feat/notification-preferences` in the branch selector, and start the workflow. Extract the wrapper ZIP and its `fiyatnobeti-developer.zip`; load the extracted folder containing `manifest.json` at `chrome://extensions`. On the FiyatNöbeti developer extension, open **Service Worker → Inspect** and run:
+Download the `fiyatnobeti-developer` artifact from a successful **Build extension test packages** Actions run for this PR branch. If no run exists, use **Actions → Build extension test packages → Run workflow**, select `feat/automatic-price-notifications` in the branch selector, and start the workflow. Extract the wrapper ZIP and its `fiyatnobeti-developer.zip`; load the extracted folder containing `manifest.json` at `chrome://extensions`. On the FiyatNöbeti developer extension, open **Service Worker → Inspect** and run:
 
 ```js
 await globalThis.fiyatNobetiDev.testPriceDropNotification()
 ```
 
-This explicit command creates one notification for the fixed `SYNTHETIC NOTIFICATION TEST` fixture (₺1.000,00 → ₺800,00, −₺200,00, %20). It does not add a product, change watchlist or price data, schedule alarms, fetch a URL, or run automatically. The command is absent from the standard extension. The `notifications` permission is required. A `created` result and returned Chrome notification ID confirm that Chrome accepted creation; operating-system notification settings, focus modes, and platform behavior can still suppress a desktop banner. If no banner appears, inspect notification permission in Chrome and check operating-system notification and focus settings. This is presentation-only infrastructure: real product checks do not trigger notifications.
+This explicit command creates one notification for the fixed `SYNTHETIC NOTIFICATION TEST` fixture (₺1.000,00 → ₺800,00, −₺200,00, %20). It does not add a product, change watchlist or price data, schedule alarms, fetch a URL, or run automatically. It remains independent of production preferences and is absent from the standard extension. The `notifications` permission is required. A `created` result and returned Chrome notification ID confirm that Chrome accepted creation; operating-system notification settings, focus modes, and platform behavior can still suppress a desktop banner. If no banner appears, inspect notification permission in Chrome and check operating-system notification and focus settings.
+
+**Safe browser smoke test:** Use a separate disposable Chrome profile and the developer package. Open the popup, inspect the default notification selections (master and decrease ON; increase OFF), then run the command above once in **Service Worker → Inspect**. Verify the synthetic title and figures and that no watchlist product or check timestamp changed. Turn the master setting OFF and repeat once to confirm the diagnostic command remains independent; restore the selection afterward. These commands test Chrome notification creation and packaging, not the automatic transition path. The latter is covered by deterministic tests with mocked Fetch/Chrome APIs. A real automatic transition cannot be exercised without an eligible product and a network-isolated browser fixture; do not use a real Amazon product or wait three hours for this smoke test. Chrome's successful API result does not guarantee a macOS banner.
 
 ## Bildirim tercihleri
 
 Popup'taki **Bildirimler** ana anahtarı varsayılan olarak açıktır; **Fiyat düştüğünde haber ver** de varsayılan olarak açıktır, **Fiyat yükseldiğinde haber ver** kapalıdır. Fiyat yönü seçimleri birbirinden bağımsızdır. Ana anahtarı kapatmak bu seçimleri silmez; iki türü de etkisiz kılar, yeniden açınca önceki seçimler geri gelir. Tercihler popup kapatılıp açıldığında ve uzantı yeniden yüklendiğinde `chrome.storage.local` içinde korunur.
 
-Bu anahtarlar FiyatNöbeti içindeki kullanıcı tercihidir; Chrome/macOS bildirim iznini değiştirmez veya istemez. İşletim sistemi bildirimleri bastırabilir. Bu PR'da gerçek fiyat kontrolleri otomatik bildirim oluşturmaz; fiyat değişimlerine göre bildirim göndermek ayrıca kararlaştırılıp uygulanacaktır. Geliştirici paketindeki yukarıdaki sentetik bildirim denemesi mevcut kalır ve bu tercihleri değiştirmez.
+Bu anahtarlar FiyatNöbeti içindeki kullanıcı tercihidir; Chrome/macOS bildirim iznini değiştirmez veya istemez. İşletim sistemi bildirimleri bastırabilir. Başarılı **otomatik** sorguda son iki başarılı fiyat karşılaştırılır: düşüş yalnızca ana anahtar ve düşüş tercihi açıksa, yükseliş yalnızca ana anahtar ve yükseliş tercihi açıksa bildirilebilir. İlk başarılı fiyat, eşit fiyat, başarısız/eksik fiyat, elle kontrol, ilk ürün ekleme ve geliştirici tanısı bildirim üretmez. Başarısız sorgu son başarılı fiyatı değiştirmediğinden, aynı fiyata dönüş de değişim sayılmaz. Bu bildirim ilkesi karttaki sabit referans karşılaştırmasından ayrıdır.
+
+Başarılı fiyat kaydı ve sonraki alarm, bildirimden bağımsız tamamlanır. Tekrarlanan bildirim girişimlerini sınırlamak için her ürün örneğinin son ele alınan otomatik geçiş zamanı, fiyatlardan ayrı `automaticNotificationMarkers` kaydına, Chrome bildirim API'si çağrılmadan **önce** yazılır. Sonraki kabul edilen geçişte silinmiş ürünlerin kayıtları temizlenir; toplam en çok 100 ürün kaydı tutulur, fiyat ve başlık içermez. Çalışan fiyat kaydından sonra durursa bildirim kaçabilir; işaretleyiciden sonra ama bildirimden önce durursa da yeniden denenmez. Chrome bildirimi oluşturma başarısızlığı veya izin reddi fiyatı geri almaz. Depolama ve bildirim API'si ortak işlem sunmadığından masaüstünde tam olarak bir kez görünürlük garantisi yoktur; yaklaşım tekrarları öncelikle önleyen, en iyi çaba teslimatıdır. Geliştirici paketindeki yukarıdaki sentetik deneme bu tercihlerden bağımsız kalır.
 
 ## Yerel izleme listesi
 
@@ -52,7 +56,11 @@ Chrome'da uzantıyı temiz bir profilde yükleyip popup'ı açın: ürün formu 
 
 ### Yerel veri şeması
 
-`chrome.storage.local` içindeki `watchlist` kaydı `{ version: 1, products: { [ASIN]: product } }` biçimindedir. Ürün kaydı kanonik URL, doğrulanmış başlık (varsa), son başarılı TRY fiyatı ve zamanı, son deneme zamanı, son kontrol durumu/hata kodu ve eklenme zamanını içerir. ASIN tekil anahtardır. Eski tek ürün prototipindeki son başarılı kayıt varsa ilk liste okumasında mevcut veriyi korumak için şemaya taşınır. Ürün HTML'i veya kısa link/izleme parametreleri saklanmaz.
+`chrome.storage.local` içindeki `watchlist` kaydı `{ version: 2, products: { [ASIN]: product } }` biçimindedir. Ürün kaydı kanonik URL, doğrulanmış başlık (varsa), son başarılı TRY fiyatı ve zamanı, son deneme zamanı, son kontrol durumu/hata kodu ve eklenme zamanını içerir. ASIN tekil anahtardır. Ek `baselinePriceTry`, `baselineCheckedAt`, `baselineSource` alanları sabit referansı tutar. Yeni ürünün ilk geçerli başarılı fiyatı `first` kaynağıyla kaydedilir; elle ve otomatik başarılı kontroller bu fiyatı sonradan değiştirmez. Eski sürümde ilk fiyat saklanmadığından, sürüm 1 listesi **herhangi bir yeni kontrol başlamadan önce** son kayıtlı başarılı fiyat ve geçerli tarih kullanılarak `migrated` kaynağına taşınır. Tarih geçersizse bilinmiyor olarak gösterilir; fiyat geçersizse ilk geçerli kontrol beklenir. Göç bir kez yapılır; fiyat, kontrol geçmişi ve uygunluk zamanları değişmez. Eski tek ürün prototipi de eldeki son başarılı fiyattan taşınır. Ürün HTML'i veya kısa link/izleme parametreleri saklanmaz.
+
+Kartta güncel başarılı fiyatın altında ilk referansa göre yüzde ve TL farkı her zaman görünür: düşüş yeşil ve “↓ %20 daha ucuz”, artış kırmızı ve “↑ %35 daha pahalı”, eşit fiyat nötr görünür. İlk fiyattan gelen referans “Başlangıç”, göç edilen son başarılı fiyattan gelen ise “Referans (geçişteki son fiyat)” diye yazılır; bu tarih ürünün eklendiği tarih olarak sunulmaz. Son kontrol başarısızsa eski karşılaştırma görünür ama fiyat “güncel değil” olarak kalır. Bildirim tercihleri kapalıyken de kart karşılaştırması görünür. Çok küçük farklar “%0,01'den az” diye belirtilir.
+
+**Ağ isteği olmadan Chrome denemesi:** Mevcut kaydınızın bulunduğu geliştirici uzantısını bu PR paketiyle güncelleyip popup'ı açın; ürünün önceki son başarılı fiyatı “Referans (geçişteki son fiyat)” olarak görünmelidir. Fiyat ve son deneme zamanı değişmemelidir. Referans ile mevcut fiyat ilk göçte eşittir, dolayısıyla nötr ifade beklenir. Gerçek izleme verisini değiştirmeden renkli farkı denemek için ayrı, atılabilir bir Chrome profilinde sentetik bir sürüm 1 `watchlist` kopyası kullanın; servis çalışanı bunu sürüm 2'ye taşıdıktan sonra yalnızca kopyadaki `lastSuccessfulPriceTry` ve `lastSuccessfulCheckAt` alanlarını `chrome.storage.local.set()` ile değiştirin. Açık popup, saklanan sabit referansa göre görünümü yeniler. Bu sentetik gösterim Amazon sonucu veya gerçek otomatik kontrol kanıtı değildir. Ana profilinizde test fiyatı yazmayın.
 
 Ürün başlığı aynı fiyat kontrolü için alınmış HTML'deki yalnızca `#productTitle` öğesinden okunur, boşlukları düzenlenir ve en fazla 200 karakter kabul edilir. Bulunamazsa `Amazon ürünü` gösterilir ve ASIN ikincil bilgi olarak sunulur. Popup başlığı HTML olarak değil, güvenli metin düğümü olarak işler.
 
@@ -60,7 +68,7 @@ Servis çalışanı yeniden başladığında önceki oturumdan kalan `checking` 
 
 ### Otomatik kontrol
 
-`chrome.storage.local` içindeki `automaticChecks` ayarı `{ version: 1, enabled: true, intervalMinutes: 180 }` biçimindedir. Üç saatlik aralık bu sürümde sabittir. Ayrı `automaticCheckState` (sürüm 1), sıradaki alarm zamanını, istekler arası en erken zamanı, bozuk/eksik zaman damgaları için koruyucu başlangıç zamanlarını ve gerekirse güvenli izin hata kodunu tutar. Ürün izleme listesi şeması değişmez.
+`chrome.storage.local` içindeki `automaticChecks` ayarı `{ version: 1, enabled: true, intervalMinutes: 180 }` biçimindedir. Üç saatlik aralık bu sürümde sabittir. Ayrı `automaticCheckState` (sürüm 1), sıradaki alarm zamanını, istekler arası en erken zamanı, bozuk/eksik zaman damgaları için koruyucu başlangıç zamanlarını ve gerekirse güvenli izin hata kodunu tutar. Sürüm 2 izleme listesi yalnızca sabit fiyat referansı alanlarını ekler; otomatik planlama değişmez.
 
 Önceki sürümün `intervalMinutes: 360` ayarı ilk uzlaştırmada `180` değerine taşınır; açık/kapalı seçimi, izleme listesi, fiyatlar ve deneme zamanları korunur. Eski altı saatlik alarm yeni uygunluk ve en az bir dakikalık araya göre yeniden kurulur. Eski uzun `notBefore` beklemesinin izin hatası olarak işaretlenmiş olanı korunur; diğer aralık beklemeleri üç saat kısaltılır, ancak bir dakikalık sınır korunur. Güncellemenin kendisi fiyat isteği başlatmaz.
 
@@ -70,7 +78,7 @@ Chrome alarmı her seferinde en çok bir uygun ürünü kontrol eder; başka uyg
 
 Popup açıkken `chrome.storage.local` içindeki izleme listesi değişirse görünen ürünler otomatik güncellenir. Bu yalnızca mevcut yerel veriyi yeniden sunar; polling veya ek Amazon isteği başlatmaz. Otomatik kontrollerin çalışması için popup'ın açık kalması gerekmez.
 
-Otomatik kontrol kapatıldığında yalnızca uzantının kendi alarmı temizlenir; başlamış bir istek tamamlanabilir, yeni otomatik istek başlatılmaz. Elle kontroller açık kalır. Amazon Türkiye site izni yoksa otomatik akış izin penceresi açmaz veya ağ isteği yapmaz; popup izin gereksinimini gösterir ve yeniden denemeyi sınırlar. Sık veya çok sayıda fiyat isteği Amazon tarafından kısıtlanabilir. Bildirimler, hedef fiyatlar ve geçmiş fiyat grafikleri henüz uygulanmadı.
+Otomatik kontrol kapatıldığında yalnızca uzantının kendi alarmı temizlenir; başlamış bir istek tamamlanabilir, yeni otomatik istek başlatılmaz. Elle kontroller açık kalır. Amazon Türkiye site izni yoksa otomatik akış izin penceresi açmaz veya ağ isteği yapmaz; popup izin gereksinimini gösterir ve yeniden denemeyi sınırlar. Sık veya çok sayıda fiyat isteği Amazon tarafından kısıtlanabilir. Hedef fiyatlar ve geçmiş fiyat grafikleri henüz uygulanmadı.
 
 ## Desteklenen bağlantılar
 

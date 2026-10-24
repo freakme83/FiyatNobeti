@@ -2,8 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildPriceDropNotification,
+  buildPriceChangeNotification,
+  calculatePriceChange,
   calculatePriceDrop,
-  presentPriceDropNotification
+  presentPriceDropNotification,
+  presentPriceChangeNotification
 } from "../src/price-drop-notification.js";
 import {
   installDeveloperPriceDropNotificationTest,
@@ -61,6 +64,34 @@ test("notification content prioritizes new, prior, absolute and percentage value
   assert.equal(notification.type, "basic");
   assert.equal(notification.title, "Test product");
   assert.equal(notification.message, "Yeni: ₺800,00 · Önceki: ₺1.000,00 · −₺200,00 (%20)");
+});
+
+test("price increase uses the same strict validation and Turkish formatting", async () => {
+  const increase = { ...validEvent(), previousPrice: 800, newPrice: 860 };
+  const change = calculatePriceChange(increase);
+  assert.equal(change.direction, "increase");
+  assert.equal(change.absoluteDifferenceText, "₺60,00");
+  assert.equal(change.percentageText, "%7,5");
+  assert.equal(calculatePriceDrop(increase), null);
+  assert.deepEqual(buildPriceChangeNotification(increase), {
+    type: "basic", title: "Test product",
+    message: "Yeni: ₺860,00 · Önceki: ₺800,00 · +₺60,00 (%7,5)",
+    contextMessage: "Fiyat yükselişi"
+  });
+  assert.equal(calculatePriceChange({ ...increase, newPrice: 800 }), null);
+  assert.equal(calculatePriceChange({ ...increase, newPrice: 860.001 }), null);
+  assert.equal(calculatePriceChange({ ...increase, previousPrice: NaN }), null);
+  assert.equal(calculatePriceChange({ ...increase, product: { asin: "BAD", title: "x" } }), null);
+  const calls = [];
+  const result = await presentPriceChangeNotification({
+    chromeApi: {
+      notifications: { getPermissionLevel: async () => "granted", create: async options => { calls.push(options); return "increase-id"; } },
+      runtime: { getURL: path => `chrome-extension://test/${path}` }
+    }, event: increase
+  });
+  assert.deepEqual(result, { status: "created", notificationId: "increase-id" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].contextMessage, "Fiyat yükselişi");
 });
 
 test("presenter creates exactly one notification and returns its API id", async () => {

@@ -1,4 +1,4 @@
-import { createWatchlist, WATCHLIST_KEY } from "./watchlist.js";
+import { createWatchlist, WATCHLIST_KEY, WATCHLIST_VERSION } from "./watchlist.js";
 
 export function createPopupWatchlistSync(storage, onWatchlist) {
   let revision = 0;
@@ -25,7 +25,7 @@ export function createPopupWatchlistSync(storage, onWatchlist) {
     if (disposed || areaName !== "local" || !Object.hasOwn(changes, WATCHLIST_KEY)) return;
     const value = changes[WATCHLIST_KEY].newValue;
     const watchlist = value === undefined ? createWatchlist() : value;
-    if (watchlist?.version !== 1 || !watchlist.products || typeof watchlist.products !== "object") return;
+    if (watchlist?.version !== WATCHLIST_VERSION || !watchlist.products || typeof watchlist.products !== "object") return;
     revision += 1;
     readSequence += 1;
     onWatchlist(watchlist);

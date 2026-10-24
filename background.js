@@ -3,6 +3,7 @@ import { resolveAmazonShortLink } from "./src/shortlink.js";
 import {
   createProductRecord,
   createWatchlist,
+  establishFirstBaseline,
   normalizeProductTitle,
   normalizeWatchlist,
   WATCHLIST_KEY
@@ -12,6 +13,8 @@ import {
   defaultAutoState, defaultAutoSettings, nextEligibleAt, normalizeAutoSettings,
   normalizeAutoState, timestampMs, migrateLegacyAutoState
 } from "./src/automatic.js";
+import { acceptAutomaticPriceTransition } from "./src/automatic-price-notification.js";
+import { presentPriceChangeNotification } from "./src/price-drop-notification.js";
 
 const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
 const SHORT_LINK_ORIGIN = "https://amzn.eu/*";
@@ -251,7 +254,14 @@ function withWatchlistLock(task) {
 
 async function readWatchlist() {
   const stored = await chrome.storage.local.get([WATCHLIST_KEY, "lastCheck", "lastSuccess"]);
-  if (stored[WATCHLIST_KEY] !== undefined) return normalizeWatchlist(stored[WATCHLIST_KEY]);
+  if (stored[WATCHLIST_KEY] !== undefined) {
+    const watchlist = normalizeWatchlist(stored[WATCHLIST_KEY]);
+    if (stored[WATCHLIST_KEY].version === 1) {
+      // Commit the old price as the reference before any check can replace it.
+      await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+    }
+    return watchlist;
+  }
 
   const watchlist = createWatchlist();
   const success = stored.lastSuccess;
@@ -260,6 +270,9 @@ async function readWatchlist() {
       const record = createProductRecord({ asin: success.asin, canonicalUrl: success.canonicalUrl, title: success.title, addedAt: success.checkedAt });
       record.lastSuccessfulPriceTry = success.priceTry;
       record.lastSuccessfulCheckAt = success.checkedAt || null;
+      // The legacy single-product probe is also a migrated observation.
+      const migrated = normalizeWatchlist({ version: 1, products: { [record.asin]: record } });
+      Object.assign(record, migrated.products[record.asin]);
       record.lastAttemptedCheckAt = stored.lastCheck?.checkedAt || success.checkedAt || null;
       record.lastCheckStatus = stored.lastCheck?.status === "failure" ? "failure" : "success";
       record.lastErrorCode = stored.lastCheck?.status === "failure" ? stored.lastCheck.errorCode || null : null;
@@ -338,7 +351,9 @@ async function checkWatchlistProduct(asin, {
         return { status: "failure", asin, errorCode: "CHECK_CANCELLED", stale: true };
       }
       product.lastAttemptedCheckAt = checkedAt;
+      const previousPrice = product.lastSuccessfulPriceTry;
       if (fetched.status === "success") {
+        establishFirstBaseline(product, fetched.priceTry, checkedAt);
         product.lastSuccessfulPriceTry = fetched.priceTry;
         product.lastSuccessfulCheckAt = checkedAt;
         if (fetched.title) product.title = fetched.title;
@@ -349,7 +364,16 @@ async function checkWatchlistProduct(asin, {
         product.lastErrorCode = fetched.errorCode || "PARSE_ERROR";
       }
       await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
-      return { ...fetched, asin, checkedAt, product: { ...product } };
+      return {
+        ...fetched, asin, checkedAt, product: { ...product },
+        ...(automatic && !bypassEligibility && fetched.status === "success" && previousPrice !== null
+          ? { notificationTransition: {
+              product: { asin, title: product.title, url: product.canonicalUrl },
+              previousPrice, newPrice: fetched.priceTry, currency: "TRY",
+              addedAt: product.addedAt, checkedAt, identity: start.identity
+            } }
+          : {})
+      };
     });
   }
   catch { return { status: "failure", asin, errorCode: "STORAGE_ERROR" }; }
@@ -493,6 +517,17 @@ function reconcileAutomaticSchedule() {
   return withWatchlistLock(() => scheduleAutomaticLocked());
 }
 
+async function notifyAutomaticResult(result) {
+  const transition = result.notificationTransition;
+  if (!transition) return;
+  const accepted = await withWatchlistLock(async () => {
+    if (productInstances.get(result.asin) !== transition.identity) return null;
+    const watchlist = await readWatchlist();
+    return acceptAutomaticPriceTransition({ storage: chrome.storage, transition, watchlist });
+  });
+  if (accepted) await presentPriceChangeNotification({ chromeApi: chrome, event: accepted });
+}
+
 async function getAutoSettings() {
   return withWatchlistLock(async () => {
     const { settings, state } = await scheduleAutomaticLocked();
@@ -586,6 +621,8 @@ async function runAutomaticAlarm(deliveredAlarm) {
       asin: selected.asin, outcome: result.status,
       ...(result.errorCode ? { errorCode: result.errorCode } : {}), requestStarted });
     await reconcileAutomaticSchedule();
+    // Presentation is secondary to the committed price and next alarm.
+    try { await notifyAutomaticResult(result); } catch { /* Best effort; never retry a claimed event. */ }
   })();
   try { await automaticRun; }
   finally { automaticRun = undefined; }
