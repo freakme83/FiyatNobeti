@@ -683,8 +683,9 @@ test("watchlist rendering treats untrusted titles as plain text", () => {
     lastSuccessfulPriceTry: null, lastSuccessfulCheckAt: null,
     lastAttemptedCheckAt: null, lastCheckStatus: "never", lastErrorCode: null
   });
-  assert.equal(row.children[0].textContent, untrustedTitle);
-  assert.equal(row.children[0].children.length, 0);
+  assert.equal(row.children[0].children[0].textContent, untrustedTitle);
+  assert.equal(row.children[0].children[0].children.length, 0);
+  assert.equal(row.children[0].children[0].href, "https://www.amazon.com.tr/dp/B0D47HCRZ6");
   assert.equal(normalizeProductTitle(`  ${untrustedTitle}  `), untrustedTitle);
   assert.match(errorMessage("CHECK_INTERRUPTED"), /yeniden başladığı için kesildi/);
 });

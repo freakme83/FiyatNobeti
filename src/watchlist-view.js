@@ -1,5 +1,6 @@
 import { compareWithBaseline } from "./price-comparison.js";
 import { priceCents } from "./watchlist.js";
+import { parseAmazonInput } from "./url.js";
 
 const ERROR_LABELS = {
   PERMISSION_REQUIRED: "Amazon Türkiye izni verilmedi.",
@@ -58,8 +59,23 @@ export function createProductRow(doc, product) {
   const row = doc.createElement("li");
   row.className = "product";
   row.dataset.asin = product.asin;
+  const heading = doc.createElement("h3");
+  heading.className = "product-title";
+  const title = product.title || "Amazon ürünü";
+  try {
+    // A stored URL is never used as a destination; only the product's ASIN is accepted.
+    const destination = parseAmazonInput(product.asin);
+    if (destination.type !== "product" || destination.asin !== product.asin) throw new Error("INVALID_PRODUCT");
+    const link = textElement(doc, "a", "", title);
+    link.href = destination.canonicalUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    heading.append(link);
+  } catch {
+    heading.textContent = title;
+  }
   row.append(
-    textElement(doc, "h3", "product-title", product.title || "Amazon ürünü"),
+    heading,
     textElement(doc, "p", "product-asin", product.asin)
   );
 

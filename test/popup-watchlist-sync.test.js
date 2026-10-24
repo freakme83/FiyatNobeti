@@ -97,8 +97,8 @@ test("the existing renderer paints storage updates as text and preserves normal 
 
   assert.equal(container.children.length, 1);
   assert.equal(emptyState.hidden, true);
-  assert.equal(container.children[0].children[0].textContent, title);
-  assert.equal(container.children[0].children[0].children.length, 0);
+  assert.equal(container.children[0].children[0].children[0].textContent, title);
+  assert.equal(container.children[0].children[0].children[0].children.length, 0);
   assert.match(rowText, /2\.500,00/);
   assert.match(rowText, /Son kontrol başarısız/);
   assert.match(rowText, /Başarılı kontrol:/);
