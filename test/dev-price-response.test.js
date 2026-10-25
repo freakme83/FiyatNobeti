@@ -64,6 +64,7 @@ function fixture({ labelTrees = [], primaryPriceTexts = [], outsidePrices = [], 
       throw new Error(`unexpected selector ${selector}`);
     },
     querySelectorAll(selector) {
+      if (selector === "form[action]" || selector === "p, label, h1, h2, h3") return [];
       if (selector === "#corePrice_feature_div .a-offscreen") return primaryCandidates;
       if (selector === ".a-price .a-offscreen") return [...primaryCandidates, ...allDescendants(root).filter(node => {
         for (let index = 0; index < node.classList.length; index++) if (node.classList.item(index) === "a-offscreen") return true;

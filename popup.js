@@ -5,6 +5,7 @@ import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
 import { createPopupNotificationPreferences } from "./src/notification-preferences.js";
 import { createWatchlist, WATCHLIST_VERSION } from "./src/watchlist.js";
+import { copyDiagnosticHistory } from "./src/diagnostic-export.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
@@ -27,6 +28,18 @@ const notifyOnDecrease = document.querySelector("#notify-on-decrease");
 const notifyOnIncrease = document.querySelector("#notify-on-increase");
 const notificationOptions = document.querySelector("#notification-options");
 const notificationStatus = document.querySelector("#notification-status");
+const copyDiagnostics = document.querySelector("#copy-diagnostics");
+const diagnosticStatus = document.querySelector("#diagnostic-status");
+
+copyDiagnostics.addEventListener("click", async () => {
+  copyDiagnostics.disabled = true;
+  try {
+    const outcome = await copyDiagnosticHistory(chrome.storage.local, navigator.clipboard);
+    diagnosticStatus.textContent = outcome === "empty" ? "Henüz tanılama kaydı yok." : "Tanılama bilgisi kopyalandı.";
+  } catch {
+    diagnosticStatus.textContent = "Tanılama bilgisi kopyalanamadı.";
+  } finally { copyDiagnostics.disabled = false; }
+});
 
 let watchlist = createWatchlist();
 const busyAsins = new Set();

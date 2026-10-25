@@ -15,6 +15,7 @@ import {
 } from "./src/automatic.js";
 import { acceptAutomaticPriceTransition } from "./src/automatic-price-notification.js";
 import { presentPriceChangeNotification } from "./src/price-drop-notification.js";
+import { appendDiagnosticHistory, completedCheckEntry } from "./src/price-check-diagnostics.js";
 
 const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
 const SHORT_LINK_ORIGIN = "https://amzn.eu/*";
@@ -103,7 +104,7 @@ function classifyResponseUrl(value) {
   } catch { return "UNAVAILABLE"; }
 }
 
-async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic } = {}) {
+async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false } = {}) {
   if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
     return { status: "failure", errorCode: "PERMISSION_REQUIRED" };
   }
@@ -134,7 +135,7 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic } = {}) {
     }
     const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
-    const parsed = await chrome.runtime.sendMessage({ type: diagnostic ? "PARSE_HTML_DIAG" : "PARSE_HTML", html });
+    const parsed = await chrome.runtime.sendMessage({ type: developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML", html });
     if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
@@ -182,6 +183,7 @@ export async function diagnoseProductForDev(asin) {
     if (start.errorCode) return finish({ status: "failure", errorCode: start.errorCode });
     const fetched = await fetchProduct(start.canonicalUrl, {
       diagnostic: report,
+      developerParse: true,
       onRequestStart: () => { report.requestStarted = true; }
     });
     const current = await withWatchlistLock(async () => {
@@ -342,7 +344,12 @@ async function checkWatchlistProduct(asin, {
     if (start.busy) return { status: "busy", asin };
     if (start.skipped) return { status: "skipped", asin };
 
-    const fetched = await fetchProduct(start.canonicalUrl, { onRequestStart });
+    const responseDiagnostic = {};
+    let requestStarted = false;
+    const fetched = await fetchProduct(start.canonicalUrl, {
+      diagnostic: responseDiagnostic,
+      onRequestStart: () => { requestStarted = true; onRequestStart?.(); }
+    });
     const checkedAt = new Date().toISOString();
     return withWatchlistLock(async () => {
       const watchlist = await readWatchlist();
@@ -364,6 +371,12 @@ async function checkWatchlistProduct(asin, {
         product.lastErrorCode = fetched.errorCode || "PARSE_ERROR";
       }
       await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+      if (requestStarted) {
+        try {
+          await appendDiagnosticHistory(chrome.storage.local,
+            completedCheckEntry({ asin, automatic, result: fetched, checkedAt, response: responseDiagnostic }));
+        } catch { /* A diagnostic write cannot change the completed price check. */ }
+      }
       return {
         ...fetched, asin, checkedAt, product: { ...product },
         ...(automatic && !bypassEligibility && fetched.status === "success" && previousPrice !== null
