@@ -65,6 +65,9 @@ export function normalizeAmazonUrl(input) {
   if (segments[0] === "dp" && segments.length >= 2) {
     asin = segments[1];
     tail = segments.slice(2);
+  } else if (segments[0] === "gp" && segments[1] === "aw" && segments[2] === "d" && segments.length >= 4) {
+    asin = segments[3];
+    tail = segments.slice(4);
   } else if (segments[0] === "gp" && segments[1] === "product" && segments.length >= 3) {
     asin = segments[2];
     tail = segments.slice(3);
