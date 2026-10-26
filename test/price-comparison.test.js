@@ -13,9 +13,11 @@ function rowText(record) {
   class Element {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
     append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this[name] = value; }
   }
-  const row = createProductRow({ createElement: tagName => new Element(tagName) }, record);
-  return { row, text: row.children.map(child => child.textContent).join(" | ") };
+  const row = createProductRow({ createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) }, record);
+  const collect = element => [element.textContent, ...element.children.map(collect)].join(" | ");
+  return { row, text: collect(row) };
 }
 
 test("first valid success fixes a baseline and later observations cannot replace it", () => {
@@ -46,8 +48,9 @@ test("lower, higher, unchanged and tiny cent-exact prices render visible Turkish
   assert.match(rowText(record).text, /↑ %35 daha pahalı.*₺350,00 daha pahalı/);
   assert.ok(rowText(record).row.children.some(child => child.className === "product-comparison increase"));
   record.lastSuccessfulPriceTry = 1000;
-  assert.match(rowText(record).text, /İlk fiyatıyla aynı/);
-  assert.ok(rowText(record).row.children.some(child => child.className === "product-comparison unchanged"));
+  const unchanged = rowText(record);
+  assert.doesNotMatch(unchanged.row.children.map(child => child.className).join(" "), /product-comparison/);
+  assert.match(unchanged.text, /İlk fiyatıyla aynı/);
   establishFirstBaseline(record, 0.01, stamp); // Existing reference remains immutable.
   record.baselinePriceTry = 999999999.99;
   record.lastSuccessfulPriceTry = 999999999.98;
@@ -68,7 +71,7 @@ test("migrated reference names the saved observation and does not imply the addi
   record.lastSuccessfulPriceTry = 800;
   const visible = rowText(record).text;
   assert.match(visible, /Referans \(geçişteki son fiyat\): ₺1\.000,00/);
-  assert.match(visible, /güncel değil/);
+  assert.match(visible, /Son kontrol başarısız/);
   assert.match(visible, /Son kontrol başarısız/);
   assert.doesNotMatch(visible, /Başlangıç:/);
 });

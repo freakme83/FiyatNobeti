@@ -71,50 +71,65 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
     link.href = destination.canonicalUrl;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
+    link.title = title;
     heading.append(link);
   } catch {
     heading.textContent = title;
   }
-  row.append(
-    heading,
-    textElement(doc, "p", "product-asin", product.asin)
-  );
+  row.append(heading);
+
+  const details = doc.createElement("div");
+  details.className = "product-details";
+  details.id = `product-details-${product.asin}`;
+  details.setAttribute("popover", "manual");
+  details.tabIndex = -1;
+  details.setAttribute("aria-label", `${title} ayrıntıları`);
+  const detailContent = doc.createElement("div");
+  detailContent.className = "product-detail-content";
+  detailContent.append(textElement(doc, "p", "product-asin", product.asin));
+  detailContent.append(textElement(doc, "p", "product-full-title", title));
 
   if (priceCents(product.lastSuccessfulPriceTry) !== null) {
-    const fresh = product.lastCheckStatus === "success";
     row.append(
-      textElement(doc, "p", "product-price-label", fresh ? "Son başarılı fiyat" : "Son başarılı fiyat · güncel değil"),
+      textElement(doc, "p", "product-price-label", "Son başarılı fiyat"),
       textElement(doc, "p", "product-price", priceFormatter.format(product.lastSuccessfulPriceTry))
     );
     const comparison = compareWithBaseline(product);
     if (comparison) {
       const tone = comparison.direction < 0 ? "decrease" : comparison.direction > 0 ? "increase" : "unchanged";
-      row.append(
-        textElement(doc, "p", `product-comparison ${tone}`, comparison.headline),
+      if (comparison.direction !== 0) row.append(textElement(doc, "p", `product-comparison ${tone}`, comparison.headline));
+      detailContent.append(
+        textElement(doc, "p", `product-comparison-detail ${tone}`, comparison.headline),
         textElement(doc, "p", "product-comparison-detail", comparison.detail),
         textElement(doc, "p", "product-meta", `${product.baselineSource === "migrated" ? "Referans (geçişteki son fiyat)" : "Başlangıç"}: ${comparison.baselineText} · ${timeLabel(product.baselineCheckedAt) || "tarih bilinmiyor"}`)
       );
-    } else row.append(textElement(doc, "p", "product-meta", "Karşılaştırma henüz kullanılamıyor."));
+    } else detailContent.append(textElement(doc, "p", "product-meta", "Karşılaştırma henüz kullanılamıyor."));
     if (product.lastSuccessfulCheckAt) {
-      row.append(textElement(doc, "p", "product-meta", `Başarılı kontrol: ${timeLabel(product.lastSuccessfulCheckAt)}`));
+      detailContent.append(textElement(doc, "p", "product-meta", `Başarılı kontrol: ${timeLabel(product.lastSuccessfulCheckAt)}`));
     }
   } else {
-    row.append(textElement(doc, "p", "product-price-label", "Henüz fiyat alınamadı"));
-    row.append(textElement(doc, "p", "product-meta", "İlk geçerli fiyat bekleniyor."));
+    row.append(textElement(doc, "p", "product-price-label", "Henüz başarılı fiyat yok"));
+    detailContent.append(textElement(doc, "p", "product-meta", "İlk geçerli fiyat bekleniyor."));
   }
 
-  let statusText = "";
-  let statusClass = "product-status";
-  if (product.lastCheckStatus === "checking") statusText = "Kontrol ediliyor…";
-  else if (product.lastCheckStatus === "failure") {
-    statusText = `Son kontrol başarısız${product.lastErrorCode ? ` · ${errorMessage(product.lastErrorCode)}` : ""}`;
-    statusClass += " error";
-  } else if (product.lastCheckStatus === "never") statusText = "Henüz kontrol edilmedi.";
-  if (statusText) row.append(textElement(doc, "p", statusClass, statusText));
+  if (product.lastCheckStatus === "failure") row.append(textElement(doc, "p", "product-status error", "Son kontrol başarısız"));
+  else if (product.lastCheckStatus === "checking") row.append(textElement(doc, "p", "product-status", "Kontrol ediliyor…"));
+  else if (product.lastCheckStatus === "never" && priceCents(product.lastSuccessfulPriceTry) === null) {
+    row.append(textElement(doc, "p", "product-status", "İlk fiyat kontrolü bekleniyor"));
+  }
+  if (product.lastCheckStatus !== "success" && product.lastCheckStatus !== "failure" && product.lastCheckStatus !== "checking" && product.lastSuccessfulCheckAt) {
+    row.append(textElement(doc, "p", "product-status error", "Fiyat güncel olmayabilir"));
+  }
+  if (product.lastCheckStatus === "failure" && product.lastErrorCode) {
+    detailContent.append(textElement(doc, "p", "product-status error", `Son kontrol başarısız · ${errorMessage(product.lastErrorCode)}`));
+  } else if (product.lastCheckStatus === "never") detailContent.append(textElement(doc, "p", "product-status", "Henüz kontrol edilmedi."));
   if (product.lastAttemptedCheckAt) {
-    row.append(textElement(doc, "p", "product-meta", `Son deneme: ${timeLabel(product.lastAttemptedCheckAt)}`));
+    detailContent.append(textElement(doc, "p", "product-meta", `Son deneme: ${timeLabel(product.lastAttemptedCheckAt)}`));
   }
+  details.append(detailContent);
 
+  const actions = doc.createElement("div");
+  actions.className = "product-actions";
   if (customOrder) {
     const orderActions = doc.createElement("div");
     orderActions.className = "product-order-actions";
@@ -130,20 +145,35 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
       button.disabled = disabled;
       orderActions.append(button);
     }
-    row.append(orderActions);
+    actions.append(orderActions);
   }
 
-  const actions = doc.createElement("div");
-  actions.className = "product-actions";
-  const check = textElement(doc, "button", "", "Fiyatı kontrol et");
+  const check = textElement(doc, "button", "", "Kontrol et");
   check.type = "button";
+  check.ariaLabel = "Fiyatı kontrol et";
   check.dataset.action = "check";
   check.dataset.asin = product.asin;
-  const remove = textElement(doc, "button", "remove", "Listeden kaldır");
+  const remove = doc.createElement("button");
+  remove.className = "remove";
   remove.type = "button";
+  remove.ariaLabel = "Listeden kaldır";
   remove.dataset.action = "remove";
   remove.dataset.asin = product.asin;
-  actions.append(check, remove);
+  const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 18 18");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3 5.5h12M6 5.5V4h6v1.5m-7 0 .5 10h7l.5-10M7.5 8v5m3-5v5");
+  svg.append(path);
+  remove.append(svg);
+  const detailsButton = textElement(doc, "button", "product-details-trigger", "Ayrıntılar");
+  detailsButton.type = "button";
+  detailsButton.dataset.action = "details";
+  detailsButton.dataset.asin = product.asin;
+  detailsButton.setAttribute("aria-controls", details.id);
+  detailsButton.setAttribute("aria-expanded", "false");
+  actions.append(check, remove, detailsButton, details);
   row.append(actions);
   return row;
 }

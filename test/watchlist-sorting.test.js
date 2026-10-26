@@ -159,18 +159,21 @@ test("custom controls are keyboard buttons with product labels; check and remove
   class Element {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
     append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this[name] = value; }
   }
   const record = products()[ids[0]];
-  const row = createProductRow({ createElement: tagName => new Element(tagName) }, record,
+  const doc = { createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) };
+  const row = createProductRow(doc, record,
     { customOrder: true, index: 0, count: 2 });
-  const orderActions = row.children.at(-2);
+  const actions = row.children.at(-1);
+  const orderActions = actions.children[0];
   assert.equal(orderActions.className, "product-order-actions");
   assert.deepEqual(orderActions.children.map(button => [button.type, button.dataset.action, button.dataset.asin, button.disabled]), [
     ["button", "move-up", ids[0], true], ["button", "move-down", ids[0], false]
   ]);
   assert.match(orderActions.children[1].ariaLabel, new RegExp(ids[0]));
-  assert.deepEqual(row.children.at(-1).children.map(button => button.dataset.action), ["check", "remove"]);
-  assert.equal(createProductRow({ createElement: tagName => new Element(tagName) }, record).children.at(-1).className, "product-actions");
+  assert.deepEqual(actions.children.slice(1, 3).map(button => button.dataset.action), ["check", "remove"]);
+  assert.equal(createProductRow(doc, record).children.at(-1).children[0].dataset.action, "check");
   const html = await readFile(new URL("../popup.html", import.meta.url), "utf8");
   assert.match(html, /<select id="watchlist-sort"/);
   assert.equal((html.match(/<option value=/g) || []).length, 5);

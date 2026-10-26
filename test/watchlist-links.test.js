@@ -9,6 +9,7 @@ const canonicalUrl = `https://www.amazon.com.tr/dp/${asin}`;
 class Element {
   constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
   append(...children) { this.children.push(...children); }
+  setAttribute(name, value) { this[name] = value; }
 }
 
 function render(overrides = {}) {
@@ -18,7 +19,7 @@ function render(overrides = {}) {
     lastAttemptedCheckAt: null, lastCheckStatus: "never", lastErrorCode: null,
     ...overrides
   };
-  return createProductRow({ createElement: tagName => new Element(tagName) }, product);
+  return createProductRow({ createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) }, product);
 }
 
 test("a known title is a native new-tab link to the canonical identity URL", () => {
@@ -28,10 +29,11 @@ test("a known title is a native new-tab link to the canonical identity URL", () 
   assert.equal(heading.tagName, "h3");
   assert.equal(link.tagName, "a");
   assert.equal(link.textContent, "Example product");
+  assert.equal(link.title, "Example product");
   assert.equal(link.href, canonicalUrl);
   assert.equal(link.target, "_blank");
   assert.equal(link.rel, "noopener noreferrer");
-  assert.equal(row.children[1].textContent, asin);
+  assert.equal(row.children.at(-1).children.at(-1).children[0].children[0].textContent, asin);
 });
 
 test("a missing title gets the same clickable fallback", () => {
@@ -58,11 +60,18 @@ test("the title link is independent of the existing check and remove controls", 
   const row = render();
   const actions = row.children.at(-1);
   assert.equal(actions.className, "product-actions");
-  assert.deepEqual(actions.children.map(button => [button.tagName, button.type, button.dataset.action, button.dataset.asin]), [
-    ["button", "button", "check", asin],
-    ["button", "button", "remove", asin]
+  assert.deepEqual(actions.children.slice(0, 2).map(button => [button.tagName, button.type, button.dataset.action, button.dataset.asin]), [
+    ["button", "button", "check", asin], ["button", "button", "remove", asin]
   ]);
+  assert.equal(actions.children[1].children[0].tagName, "svg");
+  assert.equal(actions.children[1].children[0]["aria-hidden"], "true");
+  assert.equal(actions.children[1].ariaLabel, "Listeden kaldır");
+  assert.equal(actions.children[2].tagName, "button");
+  assert.equal(actions.children[2].textContent, "Ayrıntılar");
+  assert.equal(actions.children[3].popover, "manual");
   assert.equal(row.children[0].children[0].dataset.action, undefined);
   const css = await readFile(new URL("../popup.css", import.meta.url), "utf8");
   assert.match(css, /\.product-title a:focus-visible\s*\{/);
+  assert.match(css, /-webkit-line-clamp:\s*2/);
+  assert.match(css, /\.product-actions \.remove\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;/);
 });

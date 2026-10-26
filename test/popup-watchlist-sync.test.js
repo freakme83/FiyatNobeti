@@ -74,9 +74,10 @@ test("the existing renderer paints storage updates as text and preserves normal 
   class Element {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
     append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this[name] = value; }
     replaceChildren(...nodes) { this.children = nodes; }
   }
-  const doc = { createElement: tagName => new Element(tagName) };
+  const doc = { createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) };
   const container = new Element("ul");
   const emptyState = { hidden: false };
   const storage = storageMock();
@@ -110,9 +111,10 @@ test("live storage updates repaint the fixed comparison independently of notific
   class Element {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
     append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this[name] = value; }
     replaceChildren(...nodes) { this.children = nodes; }
   }
-  const doc = { createElement: tagName => new Element(tagName) };
+  const doc = { createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) };
   const container = new Element("ul");
   const storage = storageMock();
   const sync = createPopupWatchlistSync(storage.api, value => renderProductRows(doc, container, value.products, { hidden: false }));
