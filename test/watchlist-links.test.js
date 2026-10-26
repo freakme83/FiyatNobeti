@@ -9,6 +9,7 @@ const canonicalUrl = `https://www.amazon.com.tr/dp/${asin}`;
 class Element {
   constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
   append(...children) { this.children.push(...children); }
+  setAttribute(name, value) { this[name] = value; }
 }
 
 function render(overrides = {}) {
@@ -18,7 +19,7 @@ function render(overrides = {}) {
     lastAttemptedCheckAt: null, lastCheckStatus: "never", lastErrorCode: null,
     ...overrides
   };
-  return createProductRow({ createElement: tagName => new Element(tagName) }, product);
+  return createProductRow({ createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) }, product);
 }
 
 test("a known title is a native new-tab link to the canonical identity URL", () => {
@@ -28,10 +29,11 @@ test("a known title is a native new-tab link to the canonical identity URL", () 
   assert.equal(heading.tagName, "h3");
   assert.equal(link.tagName, "a");
   assert.equal(link.textContent, "Example product");
+  assert.equal(link.title, "Example product");
   assert.equal(link.href, canonicalUrl);
   assert.equal(link.target, "_blank");
   assert.equal(link.rel, "noopener noreferrer");
-  assert.equal(row.children[1].textContent, asin);
+  assert.equal(row.children.at(-1).children.at(-1).children[0].children[0].textContent, asin);
 });
 
 test("a missing title gets the same clickable fallback", () => {
@@ -58,11 +60,65 @@ test("the title link is independent of the existing check and remove controls", 
   const row = render();
   const actions = row.children.at(-1);
   assert.equal(actions.className, "product-actions");
-  assert.deepEqual(actions.children.map(button => [button.tagName, button.type, button.dataset.action, button.dataset.asin]), [
-    ["button", "button", "check", asin],
-    ["button", "button", "remove", asin]
+  const [group, detailsButton, details] = actions.children;
+  assert.equal(group.className, "product-action-group");
+  assert.deepEqual(group.children.map(button => [button.tagName, button.type, button.dataset.action, button.dataset.asin]), [
+    ["button", "button", "check", asin], ["button", "button", "remove", asin]
   ]);
+  assert.equal(group.children[0].ariaLabel, "Fiyatı kontrol et");
+  assert.equal(group.children[0].children[0].tagName, "svg");
+  assert.equal(group.children[0].children[0]["aria-hidden"], "true");
+  assert.equal(group.children[0].children[1].textContent, "Kontrol et");
+  assert.equal(group.children[1].children[0].tagName, "svg");
+  assert.equal(group.children[1].children[0]["aria-hidden"], "true");
+  assert.equal(group.children[1].ariaLabel, "Listeden kaldır");
+  assert.equal(detailsButton.tagName, "button");
+  assert.equal(detailsButton.className, "product-details-trigger");
+  assert.equal(detailsButton.children[0].textContent, "Ayrıntılar");
+  assert.equal(detailsButton.children[1].tagName, "svg");
+  assert.equal(detailsButton["aria-controls"], details.id);
+  assert.equal(detailsButton["aria-expanded"], "false");
+  assert.equal(details.popover, "manual");
   assert.equal(row.children[0].children[0].dataset.action, undefined);
   const css = await readFile(new URL("../popup.css", import.meta.url), "utf8");
-  assert.match(css, /\.product-title a:focus-visible\s*\{/);
+  assert.match(css, /-webkit-line-clamp:\s*2/);
+  assert.match(css, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+max-content;\s*column-gap:\s*14px/);
+  assert.match(css, /font-variant-numeric:\s*tabular-nums/);
+  assert.match(css, /\.product-actions \.product-check\s*\{[^}]*white-space:\s*nowrap;/);
+  assert.match(css, /\.product-actions \.remove\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;/);
+});
+
+test("long and short product titles remain intact alongside the price column", () => {
+  const cases = [
+    ["DJI Lito X1 Fly More Combo (DJI RC 2)", 36399],
+    ["Apple AirPods Pro 3 Kablosuz Kulaklık, Aktif Gürültü Engelleme, Kalp Atış Hızı Algılama, Bluetooth Kulaklık, Uzamsal Ses, Yüksek Ses Kalitesi, USB-C ile Şarj", 11399],
+    ["Kuzenler", 500]
+  ];
+  for (const [title, price] of cases) {
+    const row = render({ title, lastSuccessfulPriceTry: price, lastCheckStatus: "success" });
+    const link = row.children[0].children[0];
+    const details = row.children.at(-1).children.at(-1);
+    assert.equal(link.textContent, title);
+    assert.equal(link.title, title);
+    assert.equal(row.children.find(child => child.className === "product-price").textContent,
+      new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(price));
+    assert.equal(details.children[0].children.find(child => child.className === "product-full-title").textContent, title);
+  }
+});
+
+test("custom-order controls remain separate from the unified product action row", () => {
+  const customRow = createProductRow({
+    createElement: tagName => new Element(tagName),
+    createElementNS: (_ns, tagName) => new Element(tagName)
+  }, {
+    asin, canonicalUrl, title: "Kuzenler", lastSuccessfulPriceTry: null,
+    lastSuccessfulCheckAt: null, lastAttemptedCheckAt: null, lastCheckStatus: "never"
+  }, { customOrder: true, index: 0, count: 2 });
+  const actions = customRow.children.at(-1);
+  assert.equal(actions.children[0].className, "product-order-actions");
+  assert.deepEqual(actions.children[0].children.map(button => [button.dataset.action, button.dataset.asin]), [
+    ["move-up", asin], ["move-down", asin]
+  ]);
+  assert.equal(actions.children[1].className, "product-action-group");
+  assert.equal(actions.children[2].dataset.action, "details");
 });

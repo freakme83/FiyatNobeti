@@ -1,5 +1,6 @@
 import { parseAmazonInput } from "./src/url.js";
 import { errorMessage, renderProductRows } from "./src/watchlist-view.js";
+import { createProductPopoverController } from "./src/product-popover.js";
 import { createPermissionOnboarding } from "./src/permission-onboarding.js";
 import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
@@ -121,6 +122,7 @@ autoEnabled.addEventListener("change", async () => {
 
 function render() {
   const sorted = sorting.getState();
+  productPopover.close();
   renderProductRows(document, productList, watchlist.products, emptyState,
     { records: sorted.records, customOrder: sorted.mode === "custom" });
   for (const button of productList.querySelectorAll('[data-action="check"]')) {
@@ -130,6 +132,8 @@ function render() {
     button.disabled = busyRemovalAsins.has(button.dataset.asin);
   }
 }
+
+const productPopover = createProductPopoverController(document, window);
 
 async function loadWatchlist() {
   const read = watchlistSync.beginRead();
@@ -198,6 +202,11 @@ productList.addEventListener("click", async event => {
   const button = event.target.closest("button[data-action][data-asin]");
   if (!button) return;
   const { action, asin } = button.dataset;
+  if (action === "details") {
+    const panel = button.closest(".product").querySelector(".product-details");
+    productPopover.toggle(button, panel);
+    return;
+  }
   if (action === "move-up" || action === "move-down") {
     sorting.move(asin, action === "move-up" ? -1 : 1);
     [...productList.querySelectorAll("button[data-action][data-asin]")]

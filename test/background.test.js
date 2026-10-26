@@ -706,8 +706,9 @@ test("watchlist rendering treats untrusted titles as plain text", () => {
   class Element {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.textContent = ""; }
     append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this[name] = value; }
   }
-  const doc = { createElement: tagName => new Element(tagName) };
+  const doc = { createElement: tagName => new Element(tagName), createElementNS: (_ns, tagName) => new Element(tagName) };
   const untrustedTitle = '<img src=x onerror="alert(1)"> & "product"';
   const row = createProductRow(doc, {
     asin: "B0D47HCRZ6", title: untrustedTitle, addedAt: "2026-10-21T00:00:00Z",

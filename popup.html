@@ -23,10 +23,9 @@
         </header>
         <div class="auto-control">
           <label for="auto-enabled">Otomatik kontrol <span>3 saatte bir</span></label>
-          <input id="auto-enabled" type="checkbox" aria-describedby="auto-note auto-status">
+          <input id="auto-enabled" type="checkbox" aria-describedby="auto-status">
           <span id="auto-mode">Yükleniyor…</span>
         </div>
-        <p id="auto-note" class="auto-note">Chrome çalışırken kontrol edilir; tarayıcı geciktirebilir. Chrome kapalıyken kontrol yapılmaz.</p>
         <p id="auto-status" class="auto-status" role="status" aria-live="polite"></p>
         <section id="notification-settings" aria-label="Bildirim tercihleri">
           <label class="notification-master" for="notifications-enabled">
@@ -46,7 +45,7 @@
           <p id="notification-status" class="notification-status" role="status" aria-live="polite">Yükleniyor…</p>
         </section>
         <form id="add-form">
-          <label for="product-url">Amazon ürün bağlantısı veya ASIN</label>
+          <label class="visually-hidden" for="product-url">Amazon ürün bağlantısı veya ASIN</label>
           <input id="product-url" type="text" required spellcheck="false"
             placeholder="Amazon ürün bağlantısı veya ASIN">
           <p id="short-link-notice" class="notice" role="note" aria-live="polite" hidden>
