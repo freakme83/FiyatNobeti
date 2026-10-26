@@ -57,10 +57,12 @@ test("changed price shows percentage on closed row; failure warning is short whi
 test("compact actions are independent of the popover; order buttons appear only in custom mode", () => {
   const normal = createProductRow(doc, product());
   const normalActions = normal.children.at(-1);
-  assert.deepEqual(normalActions.children.map(child => child.tagName), ["button", "button", "button", "div"]);
-  assert.equal(normalActions.children[1].children[0].tagName, "svg");
-  assert.equal(normalActions.children[1].ariaLabel, "Listeden kaldır");
-  assert.equal(normalActions.children[2].dataset.action, "details");
+  assert.deepEqual(normalActions.children.map(child => child.tagName), ["div", "button", "div"]);
+  assert.deepEqual(normalActions.children[0].children.map(button => button.dataset.action), ["check", "remove"]);
+  assert.equal(normalActions.children[0].children[0].children[0].tagName, "svg");
+  assert.equal(normalActions.children[0].children[1].children[0].tagName, "svg");
+  assert.equal(normalActions.children[0].children[1].ariaLabel, "Listeden kaldır");
+  assert.equal(normalActions.children[1].dataset.action, "details");
   const custom = createProductRow(doc, product(), { customOrder: true, index: 0, count: 2 });
   assert.deepEqual(custom.children.at(-1).children[0].children.map(button => button.dataset.action), ["move-up", "move-down"]);
   assert.equal(custom.children.at(-1).children[0].children[0].disabled, true);

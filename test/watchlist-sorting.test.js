@@ -172,8 +172,8 @@ test("custom controls are keyboard buttons with product labels; check and remove
     ["button", "move-up", ids[0], true], ["button", "move-down", ids[0], false]
   ]);
   assert.match(orderActions.children[1].ariaLabel, new RegExp(ids[0]));
-  assert.deepEqual(actions.children.slice(1, 3).map(button => button.dataset.action), ["check", "remove"]);
-  assert.equal(createProductRow(doc, record).children.at(-1).children[0].dataset.action, "check");
+  assert.deepEqual(actions.children[1].children.map(button => button.dataset.action), ["check", "remove"]);
+  assert.equal(createProductRow(doc, record).children.at(-1).children[0].children[0].dataset.action, "check");
   const html = await readFile(new URL("../popup.html", import.meta.url), "utf8");
   assert.match(html, /<select id="watchlist-sort"/);
   assert.equal((html.match(/<option value=/g) || []).length, 5);

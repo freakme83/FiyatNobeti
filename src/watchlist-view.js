@@ -148,7 +148,16 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
     actions.append(orderActions);
   }
 
-  const check = textElement(doc, "button", "", "Kontrol et");
+  const check = doc.createElement("button");
+  check.className = "product-check";
+  const refreshIcon = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  refreshIcon.setAttribute("viewBox", "0 0 16 16");
+  refreshIcon.setAttribute("aria-hidden", "true");
+  refreshIcon.setAttribute("focusable", "false");
+  const refreshPath = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  refreshPath.setAttribute("d", "M13 8a5 5 0 1 1-1.45-3.54M13 3v3.5H9.5");
+  refreshIcon.append(refreshPath);
+  check.append(refreshIcon, textElement(doc, "span", "", "Kontrol et"));
   check.type = "button";
   check.ariaLabel = "Fiyatı kontrol et";
   check.dataset.action = "check";
@@ -167,13 +176,27 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
   path.setAttribute("d", "M3 5.5h12M6 5.5V4h6v1.5m-7 0 .5 10h7l.5-10M7.5 8v5m3-5v5");
   svg.append(path);
   remove.append(svg);
-  const detailsButton = textElement(doc, "button", "product-details-trigger", "Ayrıntılar");
+  const actionGroup = doc.createElement("div");
+  actionGroup.className = "product-action-group";
+  actionGroup.append(check, remove);
+
+  const detailsButton = doc.createElement("button");
+  detailsButton.className = "product-details-trigger";
+  detailsButton.append(textElement(doc, "span", "", "Ayrıntılar"));
+  const chevron = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  chevron.setAttribute("viewBox", "0 0 12 12");
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.setAttribute("focusable", "false");
+  const chevronPath = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  chevronPath.setAttribute("d", "m3 4.5 3 3 3-3");
+  chevron.append(chevronPath);
+  detailsButton.append(chevron);
   detailsButton.type = "button";
   detailsButton.dataset.action = "details";
   detailsButton.dataset.asin = product.asin;
   detailsButton.setAttribute("aria-controls", details.id);
   detailsButton.setAttribute("aria-expanded", "false");
-  actions.append(check, remove, detailsButton, details);
+  actions.append(actionGroup, detailsButton, details);
   row.append(actions);
   return row;
 }
