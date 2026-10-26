@@ -48,6 +48,8 @@ Başarılı fiyat kaydı ve sonraki alarm, bildirimden bağımsız tamamlanır. 
 4. İzleme listesi popup kapanıp açılsa da `chrome.storage.local` içinde kalır. Aynı ASIN yeniden eklenirse yinelenen kayıt oluşturulmaz.
 5. Comet'te yükleme mümkünse aynı işlemleri deneyin ve uzantı hata ekranını kontrol edin.
 
+**Sıralama:** İzleme listesinin üstündeki seçim, eklenme tarihine (iki yön) veya son başarılı fiyata (iki yön) göre sıralar; fiyatı hiç alınamayan ürünler fiyat sıralamasında sonda kalır. **Özel sıralama** ilk seçildiğinde o anda görünen sıra alınır; ürün kartlarındaki ↑/↓ düğmeleri ürünü bir basamak taşır. Diğer sıralamalara geçmek özel sırayı silmez. Yeni ürünler özel sıranın başına eklenir. Seçim ve sıra `chrome.storage.local` içindeki ayrı `watchlistSortMode` ve `watchlistCustomOrder` anahtarlarında korunur; fiyat kayıtları ve otomatik kontrolün ürün seçimi değişmez.
+
 Hiçbir Amazon sekmesi açılmaz. Her iki site izni yalnızca karşılama ekranındaki açık düğmeyle, eksik origin'ler için istenir; izin verilmesi tek başına ürün sorgusu başlatmaz. Sadece Amazon Türkiye izni olan eski kurulumlarda normal arayüz açılmaz; eksik `amzn.eu` izni açıkça tamamlatılır. Popup'ta izinlerden biri eksik hale gelirse ürün gönderimi izin istemi açmak yerine onboarding'e döner ve girilmiş URL popup açık kaldığı sürece korunur. Servis çalışanı ürün eklendiğinde veya kontrol istendiğinde kimlik bilgileri olmadan kanonik URL'ye `fetch` yapar, HTML uzantının görünmeyen offscreen belgesindeki `DOMParser` ile incelenir. Bu belge **canlı bir Amazon sayfasını açıp çalıştırmaz**; Amazon'un istemci tarafında sonradan oluşturduğu fiyatları görmeyebilir.
 
 ### İlk açılış izni doğrulaması

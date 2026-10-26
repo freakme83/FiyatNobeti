@@ -6,6 +6,7 @@ import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
 import { createPopupNotificationPreferences } from "./src/notification-preferences.js";
 import { createWatchlist, WATCHLIST_VERSION } from "./src/watchlist.js";
 import { copyDiagnosticHistory } from "./src/diagnostic-export.js";
+import { createWatchlistSorting } from "./src/watchlist-sorting.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
@@ -30,6 +31,8 @@ const notificationOptions = document.querySelector("#notification-options");
 const notificationStatus = document.querySelector("#notification-status");
 const copyDiagnostics = document.querySelector("#copy-diagnostics");
 const diagnosticStatus = document.querySelector("#diagnostic-status");
+const sortSelect = document.querySelector("#watchlist-sort");
+const sortStatus = document.querySelector("#watchlist-sort-status");
 
 copyDiagnostics.addEventListener("click", async () => {
   copyDiagnostics.disabled = true;
@@ -46,6 +49,12 @@ const busyAsins = new Set();
 const busyRemovalAsins = new Set();
 const watchlistSync = createPopupWatchlistSync(chrome.storage, updatedWatchlist => {
   watchlist = updatedWatchlist;
+  sorting.updateProducts(watchlist.products);
+});
+const sorting = createWatchlistSorting(chrome.storage.local, view => {
+  sortSelect.value = view.mode;
+  sortSelect.disabled = !view.loaded;
+  sortStatus.textContent = view.status;
   render();
 });
 const notificationPreferences = createPopupNotificationPreferences(chrome.storage, view => {
@@ -67,7 +76,10 @@ const notificationPreferences = createPopupNotificationPreferences(chrome.storag
 window.addEventListener("unload", () => {
   watchlistSync.dispose();
   notificationPreferences.dispose();
+  sorting.dispose();
 }, { once: true });
+
+sortSelect.addEventListener("change", () => { sorting.changeMode(sortSelect.value); });
 
 notificationMaster.addEventListener("change", () => {
   notificationPreferences.update("enabled", notificationMaster.checked);
@@ -108,7 +120,9 @@ autoEnabled.addEventListener("change", async () => {
 });
 
 function render() {
-  renderProductRows(document, productList, watchlist.products, emptyState);
+  const sorted = sorting.getState();
+  renderProductRows(document, productList, watchlist.products, emptyState,
+    { records: sorted.records, customOrder: sorted.mode === "custom" });
   for (const button of productList.querySelectorAll('[data-action="check"]')) {
     button.disabled = busyAsins.has(button.dataset.asin);
   }
@@ -184,6 +198,12 @@ productList.addEventListener("click", async event => {
   const button = event.target.closest("button[data-action][data-asin]");
   if (!button) return;
   const { action, asin } = button.dataset;
+  if (action === "move-up" || action === "move-down") {
+    sorting.move(asin, action === "move-up" ? -1 : 1);
+    [...productList.querySelectorAll("button[data-action][data-asin]")]
+      .find(candidate => candidate.dataset.action === action && candidate.dataset.asin === asin)?.focus();
+    return;
+  }
   if (action === "remove") {
     if (busyRemovalAsins.has(asin)) return;
     busyRemovalAsins.add(asin);
@@ -241,3 +261,4 @@ const permissionOnboarding = createPermissionOnboarding({
 
 permissionOnboarding.start();
 notificationPreferences.load();
+sorting.load();
