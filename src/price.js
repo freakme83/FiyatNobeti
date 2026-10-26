@@ -143,8 +143,20 @@ export function parseTurkishPrice(value) {
 export function extractPrimaryPrice(doc) {
   const title = doc.title || "";
   const bodyText = doc.body?.textContent || "";
-  if (/robot check|captcha|automated access/i.test(title) ||
-      /enter the characters you see below|type the characters you see in this image|captcha required|doğrulama kodunu girin/i.test(bodyText)) {
+  // A verification form is structural evidence; incidental scripts and product text are not.
+  const verificationForm = [...doc.querySelectorAll("form[action]")].some(form => {
+    const action = form.getAttribute("action")?.trim();
+    if (!action || !(/^(?:\/errors_page\/validateCaptcha|https:\/\/www\.amazon\.com\.tr\/errors_page\/validateCaptcha)(?:\?[^#]*)?$/.test(action))) return false;
+    try {
+      const url = new URL(action, "https://www.amazon.com.tr");
+      return url.origin === "https://www.amazon.com.tr" && url.pathname === "/errors_page/validateCaptcha" &&
+        !url.username && !url.password && !url.hash;
+    } catch { return false; }
+  });
+  const challengeCopy = !doc.querySelector("#productTitle") && !doc.querySelector("#corePrice_feature_div") &&
+    [...doc.querySelectorAll("p, label, h1, h2, h3")].some(node =>
+      /enter the characters you see below|type the characters you see in this image|captcha required|doğrulama kodunu girin/i.test(node.textContent || ""));
+  if (verificationForm || /robot check|captcha|automated access/i.test(title) || challengeCopy) {
     return { status: "failure", errorCode: "BOT_VERIFICATION" };
   }
   if (/access denied|erişim engellendi/i.test(title) ||

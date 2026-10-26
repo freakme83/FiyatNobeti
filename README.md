@@ -261,3 +261,9 @@ if (popupSmokeBackup?.hadWatchlist) {
 }
 await chrome.storage.local.remove("popupSmokeBackup");
 ```
+
+### Fiyat kontrolü tanılama geçmişi
+
+Popup'ın altındaki kapalı **Gelişmiş / Tanılama** bölümü, son 30 tamamlanmış gerçek ürün kontrolünün güvenli yerel özetini kopyalar. Bu eylem yalnızca `chrome.storage.local` okur; Amazon isteği başlatmaz. Kayıtlar zaman, ASIN, elle/otomatik kaynak, başarılı/başarısız sonuç ve varsa tanınan hata kodu, HTTP durumu, genel içerik türü, yaklaşık yanıt boyutu ve sınırlı sayfa sınıfından oluşur. Başlık, fiyat, bağlantı, sorgu, HTML, çerez veya üstbilgi kaydedilmez. Kayıt yoksa kısa bir mesaj gösterilir. Panoya erişim engellenirse kopyalama hatası gösterilir.
+
+Amazon'un `/errors_page/validateCaptcha` adresine giden aynı kaynaklı doğrulama formu, HTTP 200 ve genel sayfa başlığı olsa bile ek doğrulama olarak sınıflandırılır. Birincil fiyat kapsayıcısı bulunmayan sayfalarda satın alma seçenekleri görünmesi tek başına doğrudan teklif, stok veya satıcı durumu kanıtı değildir; sonuç güvenli biçimde `HTML_STRUCTURE` kalır. `smid` veya satıcıya özgü gezinmenin fiyat alanına etkisi ayrıca doğrulanmamıştır. Diagnostik geçmişi yalnızca tamamlanıp ürün kaydına uygulanan kontrolleri tutar; yarıda kesilen, eski ürün örneğine ait veya yalnızca tanı amaçlı istekler tamamlanmış kontrol olarak yazılmaz. Servis çalışanı ürün kaydını kaydettikten sonra tanı kaydından önce sonlanırsa o giriş eksik kalabilir; kontrol sonucu ve sonraki zamanlama etkilenmez.

@@ -13,6 +13,7 @@ function fixture(html) {
     return {
       tagName: tagName.toUpperCase(),
       id: attributes.id || "",
+      getAttribute(name) { return attributes[name] ?? null; },
       parentElement,
       children,
       classList: {
@@ -72,6 +73,8 @@ function fixture(html) {
       throw new Error("Unexpected selector: " + selector);
     },
     querySelectorAll(selector) {
+      if (selector === "form[action]") return findAll(root, node => node.tagName === "FORM" && node.getAttribute("action") !== null);
+      if (selector === "p, label, h1, h2, h3") return findAll(root, node => ["P", "LABEL", "H1", "H2", "H3"].includes(node.tagName));
       if (selector === "#corePrice_feature_div .a-offscreen") {
         const core = findById("corePrice_feature_div");
         return core ? findAll(core, node => node.classList.contains("a-offscreen")) : [];
@@ -281,6 +284,27 @@ test("classifies bot checks, access denied, and sign-in pages before price extra
     { status: "failure", errorCode: "ACCESS_DENIED" });
   assert.deepEqual(extractPrimaryPrice(fixture('<title>Amazon Sign-In</title><input id="ap_email">')),
     { status: "failure", errorCode: "AUTH_REQUIRED" });
+});
+
+test("a same-origin CAPTCHA form is verification even under a generic Turkish title", () => {
+  const form = '<title>Amazon.com.tr</title><form action="/errors_page/validateCaptcha"><input name="amzn"></form>';
+  assert.deepEqual(extractPrimaryPrice(fixture(form)), { status: "failure", errorCode: "BOT_VERIFICATION" });
+  assert.deepEqual(extractPrimaryPrice(fixture('<p>Type the characters you see in this image</p>')),
+    { status: "failure", errorCode: "BOT_VERIFICATION" });
+  assert.deepEqual(extractPrimaryPrice(fixture('<form action="https://www.amazon.com.tr/errors_page/validateCaptcha?ref=robot"></form>')),
+    { status: "failure", errorCode: "BOT_VERIFICATION" });
+  for (const action of ["https://evil.example/errors_page/validateCaptcha", "/errors_page/validateCaptchaExtra", "//evil.example/errors_page/validateCaptcha", "/other/validateCaptcha", "/foo/../errors_page/validateCaptcha"]) {
+    assert.deepEqual(extractPrimaryPrice(fixture(`<form action="${action}"></form>`)), { status: "failure", errorCode: "HTML_STRUCTURE" });
+  }
+});
+
+test("incidental CAPTCHA script text and buying options cannot invent a primary price", () => {
+  const normal = '<title>SteelSeries</title><span id="productTitle">SteelSeries Arctis</span><div id="buyingOptions_feature_div">Diğer satın alma seçenekleri</div><script>captcha helper</script>';
+  assert.deepEqual(extractPrimaryPrice(fixture(normal)), { status: "failure", errorCode: "HTML_STRUCTURE" });
+  assert.deepEqual(extractPrimaryPrice(fixture(normal + '<div id="corePrice_feature_div"><span class="a-offscreen">800,00 TL</span></div>')),
+    { status: "success", priceTry: 800 });
+  assert.deepEqual(extractPrimaryPrice(fixture('<script>captcha required</script><div id="corePrice_feature_div"><span class="a-offscreen">800,00 TL</span></div>')),
+    { status: "success", priceTry: 800 });
 });
 
 test("extracts only a validated, normalized product title from the targeted title node", () => {

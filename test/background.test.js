@@ -30,6 +30,7 @@ let notificationPermission = "granted";
 let notificationFailure = false;
 let preferenceReadFailure = false;
 let markerWriteFailure = false;
+let diagnosticWriteFailure = false;
 let fetchCount = 0;
 globalThis.chrome = {
   runtime: {
@@ -70,6 +71,7 @@ globalThis.chrome = {
     },
     async set(value) {
       if (markerWriteFailure && Object.hasOwn(value, "automaticNotificationMarkers")) throw new Error("simulated marker write failure");
+      if (diagnosticWriteFailure && Object.hasOwn(value, "priceCheckDiagnostics")) throw new Error("simulated diagnostic write failure");
       Object.assign(stored, value);
     }
   } },
@@ -146,6 +148,8 @@ const resetWatchlist = async () => {
   parseHandler = null;
   delete stored.notificationPreferences;
   delete stored.automaticNotificationMarkers;
+  delete stored.priceCheckDiagnostics;
+  diagnosticWriteFailure = false;
   notificationCreations = 0;
   notificationOptions.length = 0;
   notificationPermission = "granted";
@@ -532,6 +536,27 @@ test("failed manual checks preserve the previous successful price and title", as
   assert.equal(after.lastCheckStatus, "failure");
   assert.equal(after.lastErrorCode, "HTTP_ERROR");
   assert.ok(after.lastAttemptedCheckAt);
+  assert.deepEqual(stored.priceCheckDiagnostics.entries.at(-1), {
+    checkedAt: failed.checkedAt, asin: "B0D47HCRZ6", origin: "manual", result: "failure", errorCode: "HTTP_ERROR",
+    httpStatus: 503, contentType: "html"
+  });
+});
+
+test("completed manual checks record safe metadata; a failed diagnostic write leaves price intact", async () => {
+  await resetWatchlist();
+  const first = await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  assert.equal(first.check.status, "success");
+  assert.equal(stored.priceCheckDiagnostics.entries.length, 1);
+  assert.equal(stored.priceCheckDiagnostics.entries[0].origin, "manual");
+  assert.equal(stored.priceCheckDiagnostics.entries[0].pageClass, "product");
+  assert.equal("priceTry" in stored.priceCheckDiagnostics.entries[0], false);
+  diagnosticWriteFailure = true;
+  parseHandler = async () => ({ status: "success", priceTry: 123, title: "Safe title" });
+  const later = await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
+  assert.equal(later.status, "success");
+  assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 123);
+  assert.equal(stored.priceCheckDiagnostics.entries.length, 1);
+  diagnosticWriteFailure = false;
 });
 
 test("concurrent updates for different products preserve both results", async () => {
@@ -564,6 +589,7 @@ test("concurrent updates for different products preserve both results", async ()
   await Promise.all([first, second]);
   assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 111);
   assert.equal(stored.watchlist.products.B0CQXKXBR7.lastSuccessfulPriceTry, 222);
+  assert.equal(stored.priceCheckDiagnostics.entries.length, 4); // Two initial and two overlapping completions.
 });
 
 test("prevents duplicate simultaneous checks for the same ASIN", async () => {
@@ -604,6 +630,7 @@ test("remove and re-add creates an independent check instance while discarding t
 
   const oldCheck = message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
   await oldStarted.promise;
+  const beforeCancelled = stored.priceCheckDiagnostics.entries.length;
   await message("REMOVE_PRODUCT", { asin: "B0D47HCRZ6" });
   const readd = message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
   await newStarted.promise;
@@ -613,6 +640,7 @@ test("remove and re-add creates an independent check instance while discarding t
   const oldResult = await oldCheck;
   assert.equal(oldResult.status, "failure");
   assert.equal(oldResult.errorCode, "CHECK_CANCELLED");
+  assert.equal(stored.priceCheckDiagnostics.entries.length, beforeCancelled);
   assert.equal(stored.watchlist.products.B0D47HCRZ6.lastCheckStatus, "checking");
   assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, null);
   assert.notEqual(stored.watchlist.products.B0D47HCRZ6.title, "Stale title");
@@ -637,6 +665,7 @@ test("a restarted service worker recovers orphaned checks and preserves successf
   product.lastAttemptedCheckAt = "2026-10-21T12:00:00.000Z";
   product.lastCheckStatus = "checking";
   product.lastErrorCode = null;
+  const completedBeforeRestart = stored.priceCheckDiagnostics.entries.length;
 
   await import("../background.js?service-worker-restart");
   const recovered = (await message("GET_WATCHLIST")).watchlist.products.B0D47HCRZ6;
@@ -647,10 +676,12 @@ test("a restarted service worker recovers orphaned checks and preserves successf
   assert.equal(recovered.lastAttemptedCheckAt, "2026-10-21T12:00:00.000Z");
   assert.equal(recovered.title, "Saved title");
   assert.equal(recovered.asin, "B0D47HCRZ6");
+  assert.equal(stored.priceCheckDiagnostics.entries.length, completedBeforeRestart);
 
   parseHandler = async () => ({ status: "success", priceTry: 778, title: null });
   assert.equal((await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" })).status, "success");
   assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, 778);
+  assert.equal(stored.priceCheckDiagnostics.entries.length, completedBeforeRestart + 1);
 });
 
 test("watchlist reads do not interrupt a genuinely active check", async () => {
@@ -875,6 +906,10 @@ test("failed automatic checks also defer retry by three hours", async () => {
     advanceToAlarm(clock);
     await fireAutomaticAlarm();
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastErrorCode, "HTTP_ERROR");
+    assert.deepEqual(stored.priceCheckDiagnostics.entries, [{
+      checkedAt: new Date(clock.now).toISOString(), asin: "B0D47HCRZ6", origin: "automatic",
+      result: "failure", errorCode: "HTTP_ERROR", httpStatus: 503, contentType: "html"
+    }]);
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastAttemptedCheckAt, new Date(clock.now).toISOString());
     assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
   });
