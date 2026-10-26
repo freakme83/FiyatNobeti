@@ -58,14 +58,28 @@ test("compact actions are independent of the popover; order buttons appear only 
   const normal = createProductRow(doc, product());
   const normalActions = normal.children.at(-1);
   assert.deepEqual(normalActions.children.map(child => child.tagName), ["div", "button", "div"]);
-  assert.deepEqual(normalActions.children[0].children.map(button => button.dataset.action), ["check", "remove"]);
-  assert.equal(normalActions.children[0].children[0].children[0].tagName, "svg");
+  assert.deepEqual(normalActions.children[0].children.map(button => button.className), ["product-check-wrap", "remove"]);
+  assert.equal(normalActions.children[0].children[0].children[0].children[0].tagName, "svg");
   assert.equal(normalActions.children[0].children[1].children[0].tagName, "svg");
   assert.equal(normalActions.children[0].children[1].ariaLabel, "Listeden kaldır");
   assert.equal(normalActions.children[1].dataset.action, "details");
   const custom = createProductRow(doc, product(), { customOrder: true, index: 0, count: 2 });
   assert.deepEqual(custom.children.at(-1).children[0].children.map(button => button.dataset.action), ["move-up", "move-down"]);
   assert.equal(custom.children.at(-1).children[0].children[0].disabled, true);
+});
+
+test("manual cooldown stays visually quiet but exposes an accessible inactive action and tooltip", () => {
+  const row = createProductRow(doc, product({ lastManualCheckAt: new Date().toISOString() }));
+  const actionGroup = row.children.at(-1).children[0];
+  const wrapper = actionGroup.children[0];
+  const button = wrapper.children[0];
+  const tooltip = wrapper.children[1];
+  assert.equal(button.dataset.action, "check");
+  assert.equal(button.disabled, false);
+  assert.equal(button.getAttribute?.("aria-disabled") ?? button["aria-disabled"], "true");
+  assert.equal(button["aria-describedby"], tooltip.id);
+  assert.equal(tooltip.hidden, false);
+  assert.match(tooltip.textContent, /^Elle yeniden kontrol için (02:5[0-9]|03:00)$/);
 });
 
 test("list rerenders create distinct product-bound popovers", () => {

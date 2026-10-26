@@ -62,16 +62,20 @@ test("the title link is independent of the existing check and remove controls", 
   assert.equal(actions.className, "product-actions");
   const [group, detailsButton, details] = actions.children;
   assert.equal(group.className, "product-action-group");
-  assert.deepEqual(group.children.map(button => [button.tagName, button.type, button.dataset.action, button.dataset.asin]), [
-    ["button", "button", "check", asin], ["button", "button", "remove", asin]
-  ]);
-  assert.equal(group.children[0].ariaLabel, "Fiyatı kontrol et");
-  assert.equal(group.children[0].children[0].tagName, "svg");
-  assert.equal(group.children[0].children[0]["aria-hidden"], "true");
-  assert.equal(group.children[0].children[1].textContent, "Kontrol et");
-  assert.equal(group.children[1].children[0].tagName, "svg");
-  assert.equal(group.children[1].children[0]["aria-hidden"], "true");
-  assert.equal(group.children[1].ariaLabel, "Listeden kaldır");
+  assert.deepEqual([group.children[0].tagName, group.children[1].tagName], ["span", "button"]);
+  const check = group.children[0].children[0];
+  const remove = group.children[1];
+  assert.equal(check.dataset.action, "check");
+  assert.equal(check.dataset.asin, asin);
+  assert.equal(remove.dataset.action, "remove");
+  assert.equal(remove.dataset.asin, asin);
+  assert.equal(check.ariaLabel, "Fiyatı kontrol et");
+  assert.equal(check.children[0].tagName, "svg");
+  assert.equal(check.children[0]["aria-hidden"], "true");
+  assert.equal(check.children[1].textContent, "Kontrol et");
+  assert.equal(remove.children[0].tagName, "svg");
+  assert.equal(remove.children[0]["aria-hidden"], "true");
+  assert.equal(remove.ariaLabel, "Listeden kaldır");
   assert.equal(detailsButton.tagName, "button");
   assert.equal(detailsButton.className, "product-details-trigger");
   assert.equal(detailsButton.children[0].textContent, "Ayrıntılar");

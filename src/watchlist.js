@@ -46,6 +46,8 @@ export function createProductRecord({ asin, canonicalUrl, title = null, addedAt 
     lastSuccessfulPriceTry: null,
     lastSuccessfulCheckAt: null,
     lastAttemptedCheckAt: null,
+    // Manual cooldown must remain independent of automatic attempts.
+    lastManualCheckAt: null,
     lastCheckStatus: "never",
     lastErrorCode: null,
     baselinePriceTry: null,
@@ -93,6 +95,7 @@ export function normalizeWatchlist(value) {
       }
     }
     record.lastAttemptedCheckAt = typeof candidate.lastAttemptedCheckAt === "string" ? candidate.lastAttemptedCheckAt : null;
+    record.lastManualCheckAt = validTimestamp(candidate.lastManualCheckAt) ? candidate.lastManualCheckAt : null;
     record.lastCheckStatus = ["never", "checking", "success", "failure"].includes(candidate.lastCheckStatus)
       ? candidate.lastCheckStatus : "never";
     record.lastErrorCode = typeof candidate.lastErrorCode === "string" && /^[A-Z0-9_]{1,64}$/.test(candidate.lastErrorCode)

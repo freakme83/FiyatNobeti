@@ -2,6 +2,7 @@ import { compareWithBaseline } from "./price-comparison.js";
 import { priceCents } from "./watchlist.js";
 import { parseAmazonInput } from "./url.js";
 import { sortWatchlistProducts } from "./watchlist-sorting.js";
+import { formatManualCooldown, manualCheckCooldownRemaining } from "./manual-check-cooldown.js";
 
 const ERROR_LABELS = {
   PERMISSION_REQUIRED: "Amazon Türkiye izni verilmedi.",
@@ -159,9 +160,25 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
   refreshIcon.append(refreshPath);
   check.append(refreshIcon, textElement(doc, "span", "", "Kontrol et"));
   check.type = "button";
+  check.disabled = false;
   check.ariaLabel = "Fiyatı kontrol et";
   check.dataset.action = "check";
   check.dataset.asin = product.asin;
+  const cooldownRemaining = manualCheckCooldownRemaining(product.lastManualCheckAt);
+  const checkWrap = doc.createElement("span");
+  checkWrap.className = cooldownRemaining > 0 ? "product-check-wrap cooldown-active" : "product-check-wrap";
+  if (cooldownRemaining > 0) {
+    check.setAttribute("aria-disabled", "true");
+    check.setAttribute("aria-describedby", `manual-check-cooldown-${product.asin}`);
+    check.dataset.cooldownUntil = String(Date.now() + cooldownRemaining);
+    check.className += " in-cooldown";
+  }
+  checkWrap.append(check);
+  const cooldownTooltip = textElement(doc, "span", "manual-check-tooltip", `Elle yeniden kontrol için ${formatManualCooldown(cooldownRemaining)}`);
+  cooldownTooltip.id = `manual-check-cooldown-${product.asin}`;
+  cooldownTooltip.setAttribute("role", "tooltip");
+  cooldownTooltip.hidden = cooldownRemaining <= 0;
+  checkWrap.append(cooldownTooltip);
   const remove = doc.createElement("button");
   remove.className = "remove";
   remove.type = "button";
@@ -178,7 +195,7 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
   remove.append(svg);
   const actionGroup = doc.createElement("div");
   actionGroup.className = "product-action-group";
-  actionGroup.append(check, remove);
+  actionGroup.append(checkWrap, remove);
 
   const detailsButton = doc.createElement("button");
   detailsButton.className = "product-details-trigger";
