@@ -1,8 +1,8 @@
 :root { color-scheme: light; font: 13px/1.45 system-ui, sans-serif; }
-body { width: 360px; max-height: 600px; margin: 0; color: #17202a; background: #fff; }
+body { width: 360px; max-height: 600px; margin: 0; color: #142b3b; background: #f7f9fa; }
 main { padding: 16px; }
 [hidden] { display: none !important; }
-h1 { margin: 0; font-size: 20px; }
+h1 { margin: 0; font-size: 19px; letter-spacing: -.025em; }
 .intro { margin: 2px 0 14px; color: #53606c; }
 .auto-control { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
 .auto-control label { display: inline; margin: 0; }
@@ -21,10 +21,10 @@ input[type="checkbox"]:disabled { cursor: default; }
 .notification-status:empty { display: none; }
 label { display: block; font-weight: 650; margin-bottom: 5px; }
 input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #a5b1bb; border-radius: 6px; font: inherit; }
-input:focus-visible, select:focus-visible, button:focus-visible, .product-title a:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
+input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible, .product-title a:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
 .notice { margin: 7px 0 0; color: #53606c; font-size: 11px; line-height: 1.4; }
 button { font: inherit; cursor: pointer; }
-#add-button { width: 100%; padding: 9px; margin-top: 8px; border: 0; border-radius: 6px; color: white; background: #146397; font-weight: 700; }
+#add-button { width: 100%; padding: 9px; margin-top: 8px; border: 0; border-radius: 4px; color: white; background: #153d57; font-weight: 650; }
 button:disabled { opacity: .6; cursor: wait; }
 #status { min-height: 1.4em; margin: 9px 0 4px; color: #40505c; }
 #watchlist-section { border-top: 1px solid #e0e6ea; padding-top: 10px; }
@@ -41,25 +41,35 @@ button:disabled { opacity: .6; cursor: wait; }
 .permission-status:empty { display: none; }
 .empty { margin: 4px 0; color: #66737d; }
 #products { list-style: none; padding: 0; margin: 0; }
-.product { padding: 10px 0; border-top: 1px solid #edf0f2; min-width: 0; }
+.product { display: grid; grid-template-columns: minmax(0, 1fr) max-content; column-gap: 9px; padding: 10px 0 9px; border-top: 1px solid #dce4e7; min-width: 0; }
 .product:first-child { border-top: 0; }
-.product-title { margin: 0; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
-.product-title a { color: #164e70; text-decoration: underline; text-underline-offset: 2px; }
+.product-title { grid-column: 1; grid-row: 1 / span 2; min-width: 0; margin: 0; font-size: 12.5px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.product-title a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: #18394d; text-decoration: none; }
+.product-title a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.product-title a:focus-visible { display: block; overflow: visible; }
 .product-asin, .product-meta { margin: 2px 0; color: #66737d; font-size: 11px; overflow-wrap: anywhere; }
-.product-price-label { margin: 6px 0 0; color: #53606c; font-size: 11px; }
-.product-price { margin: 0; font-size: 17px; font-weight: 750; }
-.product-comparison { margin: 2px 0 0; font-size: 14px; font-weight: 750; line-height: 1.3; }
+.product-full-title { margin: 3px 0 5px; font-size: 11px; overflow-wrap: anywhere; }
+.product-price-label { grid-column: 2; grid-row: 1; margin: 0; text-align: right; color: #607482; font-size: 9px; line-height: 1.3; letter-spacing: .045em; text-transform: uppercase; }
+.product-price { grid-column: 2; grid-row: 2; margin: 1px 0 0; text-align: right; font-size: 18px; font-weight: 700; line-height: 1.2; letter-spacing: -.025em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.product-comparison { grid-column: 2; grid-row: 3; margin: 2px 0 0; text-align: right; font-size: 11px; font-weight: 650; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .product-comparison.decrease { color: #146b3a; }
 .product-comparison.increase { color: #a12626; }
 .product-comparison.unchanged { color: #40505c; }
 .product-comparison-detail { margin: 1px 0; font-size: 11px; color: #40505c; }
-.product-status { margin: 3px 0; font-size: 11px; }
+.product-status { grid-column: 1; grid-row: 3; margin: 3px 0 0; font-size: 11px; }
 .product-status.error { color: #9f2927; }
-.product-actions { display: flex; gap: 8px; margin-top: 7px; }
-.product-actions button { border: 1px solid #b7c1c9; border-radius: 5px; padding: 5px 7px; color: #164e70; background: #fff; font-size: 11px; }
-.product-actions .remove { color: #73302e; }
-.product-order-actions { display: flex; gap: 5px; margin-top: 6px; }
-.product-order-actions button { width: 26px; height: 24px; border: 1px solid #b7c1c9; border-radius: 5px; color: #164e70; background: #fff; }
+.product-actions { grid-column: 1 / -1; grid-row: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 5px; }
+.product-actions button, .product-details summary { min-height: 32px; border: 1px solid transparent; border-radius: 3px; padding: 5px 7px; color: #31546a; background: transparent; font: inherit; font-size: 11px; cursor: pointer; }
+.product-actions button:hover, .product-details summary:hover { border-color: #b4c4cd; background: #eef3f5; }
+.product-actions .remove { width: 32px; height: 32px; padding: 0; border: 1px solid #aebfc8; border-radius: 50%; color: #774447; font-size: 15px; line-height: 1; }
+.product-actions .remove:hover { border-color: #a04443; color: #902b2d; background: #fbf1f1; }
+.product-details { margin-left: auto; min-width: 0; }
+.product-details[open] { flex-basis: 100%; margin-left: 0; }
+.product-details summary { display: flex; align-items: center; width: max-content; }
+.product-detail-content { padding-top: 4px; }
+.product-detail-content > :first-child { margin-top: 2px; }
+.product-order-actions { display: flex; gap: 3px; }
+.product-order-actions button { width: 32px; height: 32px; padding: 0; }
 .product-order-actions button:disabled { opacity: .45; cursor: default; }
 #diagnostic-section { border-top: 1px solid #e0e6ea; margin-top: 12px; padding-top: 8px; color: #53606c; font-size: 11px; }
 #diagnostic-section summary { cursor: pointer; }

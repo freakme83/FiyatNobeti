@@ -1,5 +1,5 @@
 import { parseAmazonInput } from "./src/url.js";
-import { errorMessage, renderProductRows } from "./src/watchlist-view.js";
+import { errorMessage, getExpandedProductAsins, renderProductRows } from "./src/watchlist-view.js";
 import { createPermissionOnboarding } from "./src/permission-onboarding.js";
 import { getMissingAmazonOrigins } from "./src/popup-permissions.js";
 import { createPopupWatchlistSync } from "./src/popup-watchlist-sync.js";
@@ -121,8 +121,9 @@ autoEnabled.addEventListener("change", async () => {
 
 function render() {
   const sorted = sorting.getState();
+  const expandedAsins = getExpandedProductAsins(productList);
   renderProductRows(document, productList, watchlist.products, emptyState,
-    { records: sorted.records, customOrder: sorted.mode === "custom" });
+    { records: sorted.records, customOrder: sorted.mode === "custom", expandedAsins });
   for (const button of productList.querySelectorAll('[data-action="check"]')) {
     button.disabled = busyAsins.has(button.dataset.asin);
   }
