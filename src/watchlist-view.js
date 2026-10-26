@@ -1,6 +1,7 @@
 import { compareWithBaseline } from "./price-comparison.js";
 import { priceCents } from "./watchlist.js";
 import { parseAmazonInput } from "./url.js";
+import { sortWatchlistProducts } from "./watchlist-sorting.js";
 
 const ERROR_LABELS = {
   PERMISSION_REQUIRED: "Amazon Türkiye izni verilmedi.",
@@ -55,7 +56,7 @@ export function errorMessage(code) {
   return ERROR_LABELS[code] || "Fiyat kontrolü başarısız oldu.";
 }
 
-export function createProductRow(doc, product) {
+export function createProductRow(doc, product, { customOrder = false, index = 0, count = 0 } = {}) {
   const row = doc.createElement("li");
   row.className = "product";
   row.dataset.asin = product.asin;
@@ -114,6 +115,24 @@ export function createProductRow(doc, product) {
     row.append(textElement(doc, "p", "product-meta", `Son deneme: ${timeLabel(product.lastAttemptedCheckAt)}`));
   }
 
+  if (customOrder) {
+    const orderActions = doc.createElement("div");
+    orderActions.className = "product-order-actions";
+    for (const [direction, label, action, disabled] of [
+      [-1, "Yukarı", "move-up", index === 0],
+      [1, "Aşağı", "move-down", index === count - 1]
+    ]) {
+      const button = textElement(doc, "button", "", direction < 0 ? "↑" : "↓");
+      button.type = "button";
+      button.dataset.action = action;
+      button.dataset.asin = product.asin;
+      button.ariaLabel = `${product.title || "Amazon ürünü"} (${product.asin}) ${label.toLowerCase()} taşı`;
+      button.disabled = disabled;
+      orderActions.append(button);
+    }
+    row.append(orderActions);
+  }
+
   const actions = doc.createElement("div");
   actions.className = "product-actions";
   const check = textElement(doc, "button", "", "Fiyatı kontrol et");
@@ -129,9 +148,10 @@ export function createProductRow(doc, product) {
   return row;
 }
 
-export function renderProductRows(doc, container, products, emptyState) {
+export function renderProductRows(doc, container, products, emptyState, options = {}) {
   container.replaceChildren();
-  const records = Object.values(products || {}).sort((left, right) => String(right.addedAt).localeCompare(String(left.addedAt)));
+  const records = options.records || sortWatchlistProducts(products);
   emptyState.hidden = records.length > 0;
-  for (const product of records) container.append(createProductRow(doc, product));
+  records.forEach((product, index) => container.append(createProductRow(doc, product,
+    { customOrder: options.customOrder, index, count: records.length })));
 }
