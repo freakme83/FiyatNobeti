@@ -16,6 +16,7 @@ import {
 import { acceptAutomaticPriceTransition } from "./src/automatic-price-notification.js";
 import { presentPriceChangeNotification } from "./src/price-drop-notification.js";
 import { appendDiagnosticHistory, completedCheckEntry } from "./src/price-check-diagnostics.js";
+import { MANUAL_CHECK_COOLDOWN_MS } from "./src/manual-check-cooldown.js";
 
 const AMAZON_ORIGIN = "https://www.amazon.com.tr/*";
 const SHORT_LINK_ORIGIN = "https://amzn.eu/*";
@@ -111,7 +112,7 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
-    onRequestStart?.();
+    if (await onRequestStart?.() === false) return { status: "failure", errorCode: "CHECK_CANCELLED" };
     const response = await fetch(canonicalUrl, {
       credentials: "omit",
       cache: "no-store",
@@ -144,7 +145,8 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
   } catch (error) {
     return {
       status: "failure",
-      errorCode: error?.message === "RESPONSE_TOO_LARGE" ? "RESPONSE_TOO_LARGE" : error?.name === "AbortError" ? "TIMEOUT" : "NETWORK_ERROR"
+      errorCode: error?.message === "STORAGE_ERROR" ? "STORAGE_ERROR"
+        : error?.message === "RESPONSE_TOO_LARGE" ? "RESPONSE_TOO_LARGE" : error?.name === "AbortError" ? "TIMEOUT" : "NETWORK_ERROR"
     };
   } finally {
     clearTimeout(timeout);
@@ -317,15 +319,21 @@ async function checkWatchlistProduct(asin, {
       const product = watchlist.products[asin];
       if (!product) return { missing: true };
       const identity = productInstance(asin);
+      flightKey = `${asin}:${identity}`;
+      if (inFlightChecks.has(flightKey)) return { busy: true };
+      if (!automatic) {
+        const lastManualAt = typeof product.lastManualCheckAt === "string" ? Date.parse(product.lastManualCheckAt) : NaN;
+        if (Number.isFinite(lastManualAt) && Date.now() - lastManualAt < MANUAL_CHECK_COOLDOWN_MS) {
+          const retryAt = lastManualAt + MANUAL_CHECK_COOLDOWN_MS;
+          return { cooldown: true, retryAt, remainingMs: retryAt - Date.now() };
+        }
+      }
       if (automatic) {
         const settings = await readAutoSettings();
         const state = await readAutoState();
         if (!settings.enabled || identity !== expectedIdentity ||
             !bypassEligibility && nextEligibleAt(product, state.unknownSince[asin]) > Date.now()) return { skipped: true };
       }
-      flightKey = `${asin}:${identity}`;
-      if (inFlightChecks.has(flightKey)) return { busy: true };
-
       product.lastAttemptedCheckAt = new Date().toISOString();
       product.lastCheckStatus = "checking";
       product.lastErrorCode = null;
@@ -343,12 +351,31 @@ async function checkWatchlistProduct(asin, {
     if (start.missing) return { status: "failure", asin, errorCode: "PRODUCT_NOT_FOUND" };
     if (start.busy) return { status: "busy", asin };
     if (start.skipped) return { status: "skipped", asin };
+    if (start.cooldown) return { status: "cooldown", asin,
+      retryAt: new Date(start.retryAt).toISOString(), remainingMs: start.remainingMs };
 
     const responseDiagnostic = {};
     let requestStarted = false;
     const fetched = await fetchProduct(start.canonicalUrl, {
       diagnostic: responseDiagnostic,
-      onRequestStart: () => { requestStarted = true; onRequestStart?.(); }
+      onRequestStart: async () => {
+        if (!automatic) {
+          try {
+            const marked = await withWatchlistLock(async () => {
+              const watchlist = await readWatchlist();
+              const current = watchlist.products[asin];
+              if (!current || productInstances.get(asin) !== start.identity) return false;
+              current.lastManualCheckAt = new Date().toISOString();
+              await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
+              return true;
+            });
+            if (!marked) return false;
+          } catch { throw new Error("STORAGE_ERROR"); }
+        }
+        requestStarted = true;
+        await onRequestStart?.();
+        return true;
+      }
     });
     const checkedAt = new Date().toISOString();
     return withWatchlistLock(async () => {
@@ -850,7 +877,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   startupRecovery
     .then(() => recoveryFailed ? { status: "failure", errorCode: "STORAGE_ERROR" } : runOperation())
     .then(async result => {
-      if (["ADD_PRODUCT", "CHECK_PRODUCT", "REMOVE_PRODUCT"].includes(message.type) && result?.status !== "failure") {
+      if (["ADD_PRODUCT", "CHECK_PRODUCT", "REMOVE_PRODUCT"].includes(message.type) &&
+          result?.status !== "failure" && result?.status !== "cooldown") {
         try { await reconcileAutomaticSchedule(); } catch { /* The completed user action remains valid. */ }
       }
       return result;

@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createProductRow, errorMessage } from "../src/watchlist-view.js";
 import { createProductRecord, normalizeProductTitle } from "../src/watchlist.js";
@@ -160,6 +160,12 @@ const resetWatchlist = async () => {
   permission = true;
   deniedOrigins.clear();
 };
+function clearManualCooldowns(...asins) {
+  for (const asin of asins) if (stored.watchlist?.products?.[asin]) stored.watchlist.products[asin].lastManualCheckAt = null;
+}
+afterEach(() => {
+  for (const product of Object.values(stored.watchlist?.products || {})) product.lastManualCheckAt = null;
+});
 
 async function fireAutomaticAlarm() {
   const alarm = alarms.get(AUTO_ALARM_NAME);
@@ -388,7 +394,7 @@ test("manual and automatic first successes establish independent fixed baselines
 
 test("legacy reference commits before a manual overwrite and survives failures and worker restart", async () => {
   useProductionBackground();
-  await withClock("2026-10-23T12:00:00.000Z", async () => {
+  await withClock("2026-10-23T12:00:00.000Z", async clock => {
     await resetWatchlist();
     const old = seedSuccessfulProduct();
     const oldTimestamp = old.lastSuccessfulCheckAt;
@@ -406,6 +412,7 @@ test("legacy reference commits before a manual overwrite and survives failures a
     await import("../background.js?baseline-worker-restart");
     await message("GET_WATCHLIST");
     assert.deepEqual(stored.watchlist, snapshot);
+    clock.advance(180_000);
     fetchHandler = async () => new Response("Unavailable", { status: 503, headers: { "content-type": "text/html" } });
     await message("CHECK_PRODUCT", { asin: old.asin });
     assert.equal(stored.watchlist.products[old.asin].lastSuccessfulPriceTry, 800);
@@ -525,6 +532,7 @@ test("failed manual checks preserve the previous successful price and title", as
   await resetWatchlist();
   parseHandler = async () => ({ status: "success", priceTry: 1298, title: "Saved title" });
   await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  clearManualCooldowns("B0D47HCRZ6");
   const before = stored.watchlist.products.B0D47HCRZ6;
   fetchHandler = async () => new Response("Denied", { status: 503, headers: { "content-type": "text/html" } });
   const failed = await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
@@ -545,6 +553,7 @@ test("failed manual checks preserve the previous successful price and title", as
 test("completed manual checks record safe metadata; a failed diagnostic write leaves price intact", async () => {
   await resetWatchlist();
   const first = await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  clearManualCooldowns("B0D47HCRZ6");
   assert.equal(first.check.status, "success");
   assert.equal(stored.priceCheckDiagnostics.entries.length, 1);
   assert.equal(stored.priceCheckDiagnostics.entries[0].origin, "manual");
@@ -564,6 +573,7 @@ test("concurrent updates for different products preserve both results", async ()
   parseHandler = async () => ({ status: "success", priceTry: 100, title: null });
   await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
   await message("ADD_PRODUCT", { url: productUrl("B0CQXKXBR7") });
+  clearManualCooldowns("B0D47HCRZ6", "B0CQXKXBR7");
   const gates = new Map();
   const started = new Map();
   fetchHandler = async url => {
@@ -595,6 +605,7 @@ test("concurrent updates for different products preserve both results", async ()
 test("prevents duplicate simultaneous checks for the same ASIN", async () => {
   await resetWatchlist();
   await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  clearManualCooldowns("B0D47HCRZ6");
   let started;
   const fetchStarted = new Promise(resolve => { started = resolve; });
   let completeParse;
@@ -616,6 +627,7 @@ test("remove and re-add creates an independent check instance while discarding t
   await resetWatchlist();
   parseHandler = async () => ({ status: "success", priceTry: 100, title: "Old title" });
   await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  clearManualCooldowns("B0D47HCRZ6");
   const oldParse = deferred();
   const newParse = deferred();
   const oldStarted = deferred();
@@ -665,6 +677,7 @@ test("a restarted service worker recovers orphaned checks and preserves successf
   product.lastAttemptedCheckAt = "2026-10-21T12:00:00.000Z";
   product.lastCheckStatus = "checking";
   product.lastErrorCode = null;
+  clearManualCooldowns("B0D47HCRZ6");
   const completedBeforeRestart = stored.priceCheckDiagnostics.entries.length;
 
   await import("../background.js?service-worker-restart");
@@ -687,6 +700,7 @@ test("a restarted service worker recovers orphaned checks and preserves successf
 test("watchlist reads do not interrupt a genuinely active check", async () => {
   await resetWatchlist();
   await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+  clearManualCooldowns("B0D47HCRZ6");
   const parsed = deferred();
   const started = deferred();
   fetchHandler = async () => { started.resolve(); return htmlResponse("B0D47HCRZ6"); };
@@ -895,6 +909,88 @@ test("addition and manual refresh delay automatic eligibility for three elapsed 
     advanceToAlarm(clock);
     await fireAutomaticAlarm();
     assert.equal(requests, 3);
+  });
+});
+
+test("manual checks enforce a per-ASIN three-minute cooldown after actual failed and successful requests", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    const first = seedSuccessfulProduct("B0D47HCRZ6");
+    const other = seedSuccessfulProduct("B0CQXKXBR7");
+    fetchHandler = async () => new Response("Unavailable", { status: 503, headers: { "content-type": "text/html" } });
+
+    const initial = await message("CHECK_PRODUCT", { asin: first.asin });
+    assert.equal(initial.errorCode, "HTTP_ERROR");
+    assert.equal(stored.watchlist.products[first.asin].lastManualCheckAt, new Date(clock.now).toISOString());
+    assert.equal(stored.watchlist.products[first.asin].lastSuccessfulPriceTry, 1000);
+    assert.equal(fetchCount, 1);
+    await import("../background.js?manual-cooldown-worker-restart");
+
+    clock.advance(1000);
+    const atOneSecond = await message("CHECK_PRODUCT", { asin: first.asin });
+    assert.equal(atOneSecond.status, "cooldown");
+    assert.equal(atOneSecond.retryAt, new Date(clock.now + 179_000).toISOString());
+    const scheduledAlarmBeforeCooldown = alarms.get(AUTO_ALARM_NAME)?.scheduledTime;
+    const attemptedAtBeforeRefusal = stored.watchlist.products[first.asin].lastAttemptedCheckAt;
+    const diagnosticsBeforeRefusal = stored.priceCheckDiagnostics.entries.length;
+    // Product B remains available immediately while product A is cooling down.
+    assert.equal((await message("CHECK_PRODUCT", { asin: other.asin })).errorCode, "HTTP_ERROR");
+    assert.equal(fetchCount, 2);
+    const diagnosticsAfterOtherProduct = stored.priceCheckDiagnostics.entries.length;
+    clock.advance(178_000);
+    assert.equal((await message("CHECK_PRODUCT", { asin: first.asin })).status, "cooldown");
+    clock.advance(999);
+    assert.equal((await message("CHECK_PRODUCT", { asin: first.asin })).status, "cooldown");
+    assert.equal(fetchCount, 2);
+    assert.equal(stored.watchlist.products[first.asin].lastSuccessfulPriceTry, 1000);
+    assert.equal(stored.watchlist.products[first.asin].lastAttemptedCheckAt, attemptedAtBeforeRefusal);
+    assert.equal(diagnosticsAfterOtherProduct, diagnosticsBeforeRefusal + 1);
+    assert.equal(stored.priceCheckDiagnostics.entries.length, diagnosticsAfterOtherProduct);
+    assert.equal(alarms.get(AUTO_ALARM_NAME)?.scheduledTime, scheduledAlarmBeforeCooldown);
+    clock.advance(1);
+    assert.equal((await message("CHECK_PRODUCT", { asin: first.asin })).errorCode, "HTTP_ERROR");
+    assert.equal(fetchCount, 3);
+    assert.equal(stored.watchlist.products[first.asin].lastManualCheckAt, new Date(clock.now).toISOString());
+  });
+});
+
+test("initial add checks start cooldown, but permission-blocked attempts do not", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    fetchHandler = async () => htmlResponse("B0D47HCRZ6");
+    const added = await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+    assert.equal(added.check.status, "success");
+    assert.equal(added.watchlist.products.B0D47HCRZ6.lastManualCheckAt, new Date(clock.now).toISOString());
+    assert.equal((await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" })).status, "cooldown");
+    assert.equal(fetchCount, 1);
+
+    await resetWatchlist();
+    seedProduct("B0CQXKXBR7");
+    permission = false;
+    const denied = await message("CHECK_PRODUCT", { asin: "B0CQXKXBR7" });
+    assert.equal(denied.errorCode, "PERMISSION_REQUIRED");
+    assert.equal(stored.watchlist.products.B0CQXKXBR7.lastManualCheckAt, null);
+    assert.equal(fetchCount, 0);
+    permission = true;
+    assert.equal((await message("CHECK_PRODUCT", { asin: "B0CQXKXBR7" })).status, "success");
+    assert.equal(fetchCount, 1);
+  });
+});
+
+test("automatic checks ignore the manual cooldown timestamp and retain normal eligibility", async () => {
+  useProductionBackground();
+  await withClock("2026-10-21T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    const product = seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T06:00:00.000Z" });
+    product.lastManualCheckAt = new Date(clock.now - 30_000).toISOString();
+    fetchHandler = async () => htmlResponse(product.asin);
+    await installedListener();
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    assert.equal(fetchCount, 1);
+    assert.equal(stored.priceCheckDiagnostics.entries.at(-1).origin, "automatic");
   });
 });
 

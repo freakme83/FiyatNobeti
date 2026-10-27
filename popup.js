@@ -8,6 +8,8 @@ import { createPopupNotificationPreferences } from "./src/notification-preferenc
 import { createWatchlist, WATCHLIST_VERSION } from "./src/watchlist.js";
 import { copyDiagnosticHistory } from "./src/diagnostic-export.js";
 import { createWatchlistSorting } from "./src/watchlist-sorting.js";
+import { createManualCheckTooltipController } from "./src/manual-check-tooltip.js";
+import { isManualCooldownActive, manualCheckCooldownUntil } from "./src/manual-check-cooldown.js";
 
 const loadingView = document.querySelector("#permission-loading");
 const onboardingView = document.querySelector("#permission-onboarding");
@@ -48,6 +50,8 @@ copyDiagnostics.addEventListener("click", async () => {
 let watchlist = createWatchlist();
 const busyAsins = new Set();
 const busyRemovalAsins = new Set();
+const manualCheckTooltips = createManualCheckTooltipController(productList);
+let cooldownExpiryTimer = null;
 const watchlistSync = createPopupWatchlistSync(chrome.storage, updatedWatchlist => {
   watchlist = updatedWatchlist;
   sorting.updateProducts(watchlist.products);
@@ -78,6 +82,8 @@ window.addEventListener("unload", () => {
   watchlistSync.dispose();
   notificationPreferences.dispose();
   sorting.dispose();
+  manualCheckTooltips.dispose();
+  if (cooldownExpiryTimer !== null) clearTimeout(cooldownExpiryTimer);
 }, { once: true });
 
 sortSelect.addEventListener("change", () => { sorting.changeMode(sortSelect.value); });
@@ -122,6 +128,7 @@ autoEnabled.addEventListener("change", async () => {
 
 function render() {
   const sorted = sorting.getState();
+  manualCheckTooltips.reset();
   productPopover.close();
   renderProductRows(document, productList, watchlist.products, emptyState,
     { records: sorted.records, customOrder: sorted.mode === "custom" });
@@ -130,6 +137,18 @@ function render() {
   }
   for (const button of productList.querySelectorAll('[data-action="remove"]')) {
     button.disabled = busyRemovalAsins.has(button.dataset.asin);
+  }
+  if (cooldownExpiryTimer !== null) clearTimeout(cooldownExpiryTimer);
+  cooldownExpiryTimer = null;
+  const nextExpiry = Object.values(watchlist.products)
+    .map(product => manualCheckCooldownUntil(product.lastManualCheckAt))
+    .filter(until => until !== null && until > Date.now())
+    .sort((left, right) => left - right)[0];
+  if (nextExpiry !== undefined) {
+    cooldownExpiryTimer = setTimeout(() => {
+      cooldownExpiryTimer = null;
+      render();
+    }, Math.max(1, nextExpiry - Date.now() + 5));
   }
 }
 
@@ -232,6 +251,7 @@ productList.addEventListener("click", async event => {
     return;
   }
   if (action !== "check" || busyAsins.has(asin)) return;
+  if (button.getAttribute("aria-disabled") === "true" && isManualCooldownActive(button.dataset.cooldownUntil)) return;
 
   busyAsins.add(asin);
   const current = watchlist.products[asin];
@@ -241,6 +261,7 @@ productList.addEventListener("click", async event => {
   try {
     const result = await chrome.runtime.sendMessage({ type: "CHECK_PRODUCT", asin });
     if (result?.status === "busy") status.textContent = "Bu ürün için kontrol zaten sürüyor.";
+    else if (result?.status === "cooldown") status.textContent = "Bu ürün için manuel kontrol henüz kullanılamıyor.";
     else if (result?.status === "success") status.textContent = "Fiyat kontrolü tamamlandı.";
     else if (result?.status === "failure") showFailure(result);
     await loadWatchlist();
