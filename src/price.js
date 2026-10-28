@@ -3,6 +3,8 @@ const PAYABLE_PRICE_SELECTOR = "#apex-pricetopay-accessibility-label";
 const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
 const MAX_PRICE_ANCESTORS = 6;
 const EXCLUDED_PRICE_CONTEXT = /(?:coupon|shipping|installment|monthly|used|other.?seller|recommend|similar|variation|format|unit|discount|list.?price)/i;
+const NEW_OFFER_LABEL = /^Yenisini Satın Al(?:$|[\s:·–—])/iu;
+const NON_NEW_OFFER_LABEL = /^(?:Kullanılmış|Yenilenmiş|İkinci el|Used|Refurbished|Renewed|Second hand)(?:$|[\s:·–—])/iu;
 
 export function extractProductTitle(doc) {
   const candidate = doc.querySelector("#productTitle")?.textContent;
@@ -114,6 +116,31 @@ function onlyDivsBetween(descendant, ancestor) {
   return true;
 }
 
+function leadingHeadingText(heading) {
+  const parts = [];
+  for (const child of heading?.childNodes || []) {
+    if (child.nodeType === 3) {
+      parts.push(child.nodeValue || "");
+      continue;
+    }
+    if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
+    // Do not mine unrelated or nested descendants for a condition label.
+    break;
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function primaryOfferCondition(candidate, primaryContainer) {
+  const row = candidate?.closest?.(".a-accordion-row");
+  if (!row || !primaryContainer?.contains?.(row)) return { inOfferRow: false, condition: "unknown" };
+  const headings = [...row.querySelectorAll("h5")];
+  if (headings.length !== 1) return { inOfferRow: true, condition: "unknown" };
+  const label = leadingHeadingText(headings[0]);
+  if (NEW_OFFER_LABEL.test(label)) return { inOfferRow: true, condition: "new" };
+  if (NON_NEW_OFFER_LABEL.test(label)) return { inOfferRow: true, condition: "non-new" };
+  return { inOfferRow: true, condition: "unknown" };
+}
+
 function extractPayablePriceFallback(doc) {
   const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
   if (candidates.length > 1) return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
@@ -171,13 +198,29 @@ export function extractPrimaryPrice(doc) {
     return { status: "failure", errorCode: "HTML_STRUCTURE" };
   }
   const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)].filter(candidate => !isUnitPriceCandidate(candidate));
-  if (candidates.length > 1) {
-    return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
-  }
-  if (candidates.length === 0 || !candidates[0].textContent?.trim()) {
+  if (candidates.length === 1 && !candidates[0].textContent?.trim()) {
     return extractPayablePriceFallback(doc);
   }
-  const priceTry = parseTurkishPrice(candidates[0].textContent);
+  let selectedCandidate;
+  if (candidates.length > 1) {
+    const conditions = candidates.map(candidate => primaryOfferCondition(candidate, primaryContainer));
+    if (conditions.some(({ condition }) => condition === "unknown")) {
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    }
+    const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
+    if (newIndexes.length > 1) return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
+    selectedCandidate = candidates[newIndexes[0]];
+  } else if (candidates.length === 1) {
+    const offer = primaryOfferCondition(candidates[0], primaryContainer);
+    if (offer.condition === "non-new") return { status: "failure", errorCode: "PRICE_MISSING" };
+    if (offer.inOfferRow && offer.condition === "unknown") return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    selectedCandidate = candidates[0];
+  }
+  if (candidates.length === 0) {
+    return extractPayablePriceFallback(doc);
+  }
+  const priceTry = parseTurkishPrice(selectedCandidate.textContent);
   return priceTry === null
     ? { status: "failure", errorCode: "PRICE_UNRECOGNIZED" }
     : { status: "success", priceTry };

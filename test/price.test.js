@@ -9,19 +9,40 @@ function fixture(html) {
   function makeNode(tagName, attributes, parentElement) {
     const classNames = (attributes.class || "").split(/\s+/).filter(Boolean);
     const children = [];
+    const childNodes = [];
     let ownText = "";
     return {
+      nodeType: tagName === "#document" ? 9 : 1,
       tagName: tagName.toUpperCase(),
       id: attributes.id || "",
       getAttribute(name) { return attributes[name] ?? null; },
       parentElement,
       children,
+      childNodes,
       classList: {
         length: classNames.length,
         item(index) { return classNames[index] ?? null; },
         contains(value) { return classNames.includes(value); }
       },
-      appendText(value) { ownText += value; },
+      appendText(value) {
+        ownText += value;
+        childNodes.push({ nodeType: 3, nodeValue: value, textContent: value });
+      },
+      closest(selector) {
+        if (selector !== ".a-accordion-row") return null;
+        for (let node = this; node; node = node.parentElement) {
+          if (node.classList?.contains("a-accordion-row")) return node;
+        }
+        return null;
+      },
+      contains(target) {
+        for (let node = target; node; node = node.parentElement) if (node === this) return true;
+        return false;
+      },
+      querySelectorAll(selector) {
+        if (selector !== "h5") throw new Error("Unexpected element selector: " + selector);
+        return findAll(this, node => node.tagName === "H5");
+      },
       get textContent() { return ownText + children.map(child => child.textContent).join(""); }
     };
   }
@@ -50,6 +71,7 @@ function fixture(html) {
     }
     const node = makeNode(tagName, attributes, stack.at(-1));
     stack.at(-1).children.push(node);
+    stack.at(-1).childNodes.push(node);
     if (!voidTags.has(tagName) && !/\/\s*>$/.test(token)) stack.push(node);
   }
 
@@ -274,6 +296,47 @@ test("rejects multiple primary candidates and unrecognized primary prices", () =
       <span class="a-offscreen">40.000,00TL</span>
     </div>`)), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
   assert.deepEqual(extractPrimaryPrice(fixture('<div id="corePrice_feature_div"><span class="a-offscreen">See options</span></div>')),
+    { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
+});
+
+function offerMarkup(label, price, extraHeadingMarkup = "") {
+  return `<div class="a-accordion-row"><h5>${label}${extraHeadingMarkup}</h5><span class="a-offscreen">${price}</span></div>`;
+}
+
+test("selects the uniquely new offer by its own leading H5 text, regardless of order or price", () => {
+  const styleTail = `<style>.a-accordion-row{color:red}</style><span>unrelated descendant</span>`;
+  for (const [firstLabel, firstPrice, secondLabel, secondPrice] of [
+    ["Yenisini Satın Al", "51.399,00TL", "Kullanılmış ve yeni gibi", "46.647,90TL"],
+    ["Kullanılmış ve yeni gibi", "46.647,90TL", "Yenisini Satın Al", "51.399,00TL"],
+    ["Kullanılmış ve yeni gibi", "60.000,00TL", "Yenisini Satın Al", "51.399,00TL"]
+  ]) {
+    const doc = fixture(`<div id="corePrice_feature_div">${offerMarkup(firstLabel, firstPrice, styleTail)}${offerMarkup(secondLabel, secondPrice, styleTail)}</div>`);
+    assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
+  }
+});
+
+test("fails closed for no new offer, multiple new offers, and unknown competing conditions", () => {
+  const cases = [
+    [offerMarkup("Kullanılmış ve yeni gibi", "46.647,90TL") + offerMarkup("Yenilenmiş", "48.000,00TL"), "PRICE_MISSING"],
+    [offerMarkup("Yenisini Satın Al", "51.399,00TL") + offerMarkup("Yenisini Satın Al", "52.000,00TL"), "PRICE_AMBIGUOUS"],
+    [offerMarkup("Yenisini Satın Al", "51.399,00TL") + offerMarkup("Diğer satın alma seçenekleri", "46.647,90TL"), "PRICE_AMBIGUOUS"],
+    [offerMarkup("Yenisini Satın Al", "51.399,00TL") + offerMarkup("Diğer satın alma seçenekleri", "46.647,90TL") + "<p>Yenisini Satın Al</p><script>Yenisini Satın Al</script><style>Yenisini Satın Al</style>", "PRICE_AMBIGUOUS"]
+  ];
+  for (const [offers, errorCode] of cases) {
+    assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${offers}</div>`)),
+      { status: "failure", errorCode });
+  }
+});
+
+test("single explicit used offer is never recorded as the current new-product price", () => {
+  assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${offerMarkup("Kullanılmış ve yeni gibi", "46.647,90TL")}</div>`)),
+    { status: "failure", errorCode: "PRICE_MISSING" });
+});
+
+test("a single ordinary primary price and strict price-format failures remain unchanged", () => {
+  assert.deepEqual(extractPrimaryPrice(fixture('<div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div>')),
+    { status: "success", priceTry: 51399 });
+  assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${offerMarkup("Yenisini Satın Al", "51.399 TL")}</div>`)),
     { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
 });
 
