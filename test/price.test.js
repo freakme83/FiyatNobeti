@@ -334,6 +334,43 @@ test("an ordinary single-price page remains successful", () => {
     { status: "success", priceTry: 51399 });
 });
 
+test("ambiguity callback identifies the primary-candidate parser branch with bounded counts", () => {
+  const doc = fixture(`<div id="corePrice_feature_div">
+    <div class="a-accordion-row"><h5>Yenisini Satın Al</h5><span class="a-offscreen">51.399,00TL</span></div>
+    <div class="a-accordion-row"><h5>Kullanılmış</h5><span class="a-offscreen">46.647,90TL</span></div>
+    <div class="a-accordion-row"><h5>Satın alma seçenekleri</h5><span class="a-offscreen">49.000,00TL</span></div>
+  </div>`);
+  let diagnostic;
+  const result = extractPrimaryPrice(doc, value => { diagnostic = value; });
+  assert.deepEqual(result, { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+  assert.deepEqual(diagnostic, {
+    errorCode: "PRICE_AMBIGUOUS",
+    source: "PRIMARY_MULTIPLE_UNKNOWN",
+    primaryCandidateCount: 3,
+    fallbackCandidateCount: 0,
+    newOfferCount: 1,
+    nonNewOfferCount: 1,
+    unknownOfferCount: 1
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|46\.647|49\.000|Yenisini|Kullanılmış/);
+});
+
+test("ambiguity callback identifies multiple fallback labels without changing parser result", () => {
+  const doc = fixture(`<div id="corePrice_feature_div"></div>${payableMarkup("194,74 TL")}${payableMarkup("199,00 TL")}`);
+  let diagnostic;
+  const result = extractPrimaryPrice(doc, value => { diagnostic = value; });
+  assert.deepEqual(result, { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+  assert.deepEqual(diagnostic, {
+    errorCode: "PRICE_AMBIGUOUS",
+    source: "FALLBACK_MULTIPLE",
+    primaryCandidateCount: 0,
+    fallbackCandidateCount: 2,
+    newOfferCount: 0,
+    nonNewOfferCount: 0,
+    unknownOfferCount: 0
+  });
+});
+
 test("classifies bot checks, access denied, and sign-in pages before price extraction", () => {
   assert.deepEqual(extractPrimaryPrice(fixture('<title>Robot Check</title><p>Enter the characters you see below</p>')),
     { status: "failure", errorCode: "BOT_VERIFICATION" });

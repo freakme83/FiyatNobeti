@@ -20,6 +20,7 @@ const DEV_BACKGROUND_SOURCE = `import {
   runAutomaticAlarmTestForDev,
   runOneAutomaticCheckForDev,
   diagnoseProductForDev,
+  getLastPriceParserAmbiguityForDev,
   setDeveloperEventRecorderForDev
 } from "./background.js";
 import { installDeveloperAutomaticAlarmTest } from "./dev-automatic-alarm.js";
@@ -44,6 +45,7 @@ Object.defineProperty(globalThis, "fiyatNobetiDev", {
     getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest,
     getAutomaticCheckDiagnostics: observability.getAutomaticCheckDiagnostics,
     diagnoseProduct: diagnoseProductForDev,
+    getLastPriceParserAmbiguity: getLastPriceParserAmbiguityForDev,
     testPriceDropNotification: notificationTest.testPriceDropNotification
   }),
   enumerable: true,
@@ -70,7 +72,7 @@ export async function prepareDevExtension(root = defaultRoot) {
   await cp(join(sourceRoot, "scripts/dev-price-drop-notification.js"), join(target, "scripts/dev-price-drop-notification.js"));
   await cp(join(sourceRoot, "scripts/dev-price-response.js"), join(target, "scripts/dev-price-response.js"));
   await writeFile(join(target, "background.dev.js"), DEV_BACKGROUND_SOURCE);
-  await writeFile(join(target, "offscreen.dev.js"), 'import "./offscreen.js";\nimport { installDeveloperPriceParser } from "./scripts/dev-price-response.js";\ninstallDeveloperPriceParser();\n');
+  await writeFile(join(target, "offscreen.dev.js"), 'import { installDeveloperPriceParser } from "./scripts/dev-price-response.js";\ninstallDeveloperPriceParser();\n');
   const offscreenPath = join(target, "offscreen.html");
   await writeFile(offscreenPath, (await readFile(offscreenPath, "utf8")).replace('src="offscreen.js"', 'src="offscreen.dev.js"'));
 

@@ -5,6 +5,29 @@ const MAX_PRICE_ANCESTORS = 6;
 const EXCLUDED_PRICE_CONTEXT = /(?:coupon|shipping|installment|monthly|used|other.?seller|recommend|similar|variation|format|unit|discount|list.?price)/i;
 const NEW_OFFER_LABEL = /^Yenisini Satın Al(?:$|[\s:·–—])/iu;
 const NON_NEW_OFFER_LABEL = /^(?:Kullanılmış|Yenilenmiş|İkinci el|Used|Refurbished|Renewed|Second hand)(?:$|[\s:·–—])/iu;
+const MAX_AMBIGUITY_DIAGNOSTIC_COUNT = 100;
+
+function reportPriceAmbiguity(onAmbiguous, source, {
+  primaryCandidateCount = 0,
+  fallbackCandidateCount = 0,
+  newOfferCount = 0,
+  nonNewOfferCount = 0,
+  unknownOfferCount = 0
+} = {}) {
+  if (typeof onAmbiguous !== "function") return;
+  const bounded = value => Math.min(MAX_AMBIGUITY_DIAGNOSTIC_COUNT, value);
+  try {
+    onAmbiguous({
+      errorCode: "PRICE_AMBIGUOUS",
+      source,
+      primaryCandidateCount: bounded(primaryCandidateCount),
+      fallbackCandidateCount: bounded(fallbackCandidateCount),
+      newOfferCount: bounded(newOfferCount),
+      nonNewOfferCount: bounded(nonNewOfferCount),
+      unknownOfferCount: bounded(unknownOfferCount)
+    });
+  } catch { /* Diagnostics must never affect price extraction. */ }
+}
 
 export function extractProductTitle(doc) {
   const candidate = doc.querySelector("#productTitle")?.textContent;
@@ -156,9 +179,15 @@ function primaryOfferCondition(candidate, primaryContainer) {
   return { inOfferRow: true, condition: "unknown" };
 }
 
-function extractPayablePriceFallback(doc) {
+function extractPayablePriceFallback(doc, onAmbiguous, primaryCandidateCount) {
   const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
-  if (candidates.length > 1) return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+  if (candidates.length > 1) {
+    reportPriceAmbiguity(onAmbiguous, "FALLBACK_MULTIPLE", {
+      primaryCandidateCount,
+      fallbackCandidateCount: candidates.length
+    });
+    return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+  }
   const candidate = candidates[0];
   if (!candidate) {
     return { status: "failure", errorCode: "PRICE_MISSING" };
@@ -182,7 +211,7 @@ export function parseTurkishPrice(value) {
   return Number.isSafeInteger(Math.round(price * 100)) && price > 0 ? price : null;
 }
 
-export function extractPrimaryPrice(doc) {
+export function extractPrimaryPrice(doc, onAmbiguous) {
   const title = doc.title || "";
   const bodyText = doc.body?.textContent || "";
   // A verification form is structural evidence; incidental scripts and product text are not.
@@ -214,16 +243,29 @@ export function extractPrimaryPrice(doc) {
   }
   const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)].filter(candidate => !isUnitPriceCandidate(candidate));
   if (candidates.length === 1 && !candidates[0].textContent?.trim()) {
-    return extractPayablePriceFallback(doc);
+    return extractPayablePriceFallback(doc, onAmbiguous, candidates.length);
   }
   let selectedCandidate;
   if (candidates.length > 1) {
     const conditions = candidates.map(candidate => primaryOfferCondition(candidate, primaryContainer));
-    if (conditions.some(({ condition }) => condition === "unknown")) {
+    const newOfferCount = conditions.filter(({ condition }) => condition === "new").length;
+    const nonNewOfferCount = conditions.filter(({ condition }) => condition === "non-new").length;
+    const unknownOfferCount = conditions.filter(({ condition }) => condition === "unknown").length;
+    const counts = {
+      primaryCandidateCount: candidates.length,
+      newOfferCount,
+      nonNewOfferCount,
+      unknownOfferCount
+    };
+    if (unknownOfferCount > 0) {
+      reportPriceAmbiguity(onAmbiguous, "PRIMARY_MULTIPLE_UNKNOWN", counts);
       return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
     }
     const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
-    if (newIndexes.length > 1) return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    if (newIndexes.length > 1) {
+      reportPriceAmbiguity(onAmbiguous, "PRIMARY_MULTIPLE_NEW", counts);
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    }
     if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
     selectedCandidate = candidates[newIndexes[0]];
   } else if (candidates.length === 1) {
@@ -232,7 +274,7 @@ export function extractPrimaryPrice(doc) {
     selectedCandidate = candidates[0];
   }
   if (candidates.length === 0) {
-    return extractPayablePriceFallback(doc);
+    return extractPayablePriceFallback(doc, onAmbiguous, candidates.length);
   }
   const priceTry = parseTurkishPrice(selectedCandidate.textContent);
   return priceTry === null

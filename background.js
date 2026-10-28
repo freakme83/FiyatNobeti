@@ -37,12 +37,28 @@ const productInstances = new Map();
 let nextProductInstance = 0;
 let automaticRun;
 let developerEventRecorder;
+let lastDeveloperPriceParserAmbiguity = null;
 let pendingAutomaticAlarm;
 let recoveryFailed = false;
 let startupRecovery;
 
 export function setDeveloperEventRecorderForDev(record) {
   developerEventRecorder = typeof record === "function" ? record : undefined;
+}
+
+export function getLastPriceParserAmbiguityForDev() {
+  return lastDeveloperPriceParserAmbiguity ? { ...lastDeveloperPriceParserAmbiguity } : null;
+}
+
+function normalizeParserAmbiguity(value) {
+  const sources = new Set(["PRIMARY_MULTIPLE_UNKNOWN", "PRIMARY_MULTIPLE_NEW", "FALLBACK_MULTIPLE", "OTHER"]);
+  if (value?.errorCode !== "PRICE_AMBIGUOUS" || !sources.has(value.source)) return null;
+  const report = { errorCode: "PRICE_AMBIGUOUS", source: value.source };
+  for (const key of ["primaryCandidateCount", "fallbackCandidateCount", "newOfferCount", "nonNewOfferCount", "unknownOfferCount"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > 100) return null;
+    report[key] = value[key];
+  }
+  return report;
 }
 
 function recordDeveloperEvent(event) {
@@ -105,7 +121,7 @@ function classifyResponseUrl(value) {
   } catch { return "UNAVAILABLE"; }
 }
 
-async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false } = {}) {
+async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false, captureParserAmbiguity = false } = {}) {
   if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
     return { status: "failure", errorCode: "PERMISSION_REQUIRED" };
   }
@@ -113,6 +129,8 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
     if (await onRequestStart?.() === false) return { status: "failure", errorCode: "CHECK_CANCELLED" };
+    const captureAmbiguity = captureParserAmbiguity && Boolean(developerEventRecorder);
+    if (captureAmbiguity) lastDeveloperPriceParserAmbiguity = null;
     const response = await fetch(canonicalUrl, {
       credentials: "omit",
       cache: "no-store",
@@ -136,7 +154,9 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
     }
     const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
-    const parsed = await chrome.runtime.sendMessage({ type: developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML", html });
+    const parseType = captureAmbiguity ? "PARSE_HTML_BRANCH_DIAG" : developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML";
+    const parsed = await chrome.runtime.sendMessage({ type: parseType, html });
+    if (captureAmbiguity) lastDeveloperPriceParserAmbiguity = normalizeParserAmbiguity(parsed?.branchDiagnostic);
     if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
@@ -307,8 +327,10 @@ async function checkWatchlistProduct(asin, {
   automatic = false,
   expectedIdentity,
   bypassEligibility = false,
-  onRequestStart
+  onRequestStart,
+  captureParserAmbiguity = false
 } = {}) {
+  if (captureParserAmbiguity && developerEventRecorder) lastDeveloperPriceParserAmbiguity = null;
   if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) return { status: "failure", errorCode: "INVALID_PRODUCT" };
   asin = asin.toUpperCase();
   let flightKey;
@@ -358,6 +380,7 @@ async function checkWatchlistProduct(asin, {
     let requestStarted = false;
     const fetched = await fetchProduct(start.canonicalUrl, {
       diagnostic: responseDiagnostic,
+      captureParserAmbiguity: captureParserAmbiguity && !automatic,
       onRequestStart: async () => {
         if (!automatic) {
           try {
@@ -869,7 +892,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "CHECK_PRICE") runOperation = () => probe(message.url);
   else if (message?.type === "GET_WATCHLIST") runOperation = () => getWatchlist();
   else if (message?.type === "ADD_PRODUCT") runOperation = () => addProduct(message.url);
-  else if (message?.type === "CHECK_PRODUCT") runOperation = () => checkWatchlistProduct(message.asin);
+  else if (message?.type === "CHECK_PRODUCT") runOperation = () => checkWatchlistProduct(message.asin, { captureParserAmbiguity: true });
   else if (message?.type === "REMOVE_PRODUCT") runOperation = () => removeProduct(message.asin);
   else if (message?.type === "GET_AUTO_SETTINGS") runOperation = () => getAutoSettings();
   else if (message?.type === "SET_AUTO_ENABLED") runOperation = () => setAutoEnabled(message.enabled);

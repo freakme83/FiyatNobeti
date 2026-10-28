@@ -7,6 +7,7 @@ const MAX_QUALIFICATION_DEPTH = 32;
 const MAX_CLASSES_SCANNED = 128;
 const MAX_RECOGNIZED_CLASSES_PER_NODE = 8;
 const MAX_REGION_TOKENS = 5;
+const PARSE_MESSAGE_TYPES = new Set(["PARSE_HTML", "PARSE_HTML_DIAG", "PARSE_HTML_BRANCH_DIAG"]);
 
 // Only exact, stable Amazon layout tokens may leave the diagnostic.
 const SAFE_IDS = new Set([
@@ -223,13 +224,18 @@ export function inspectPriceDocument(doc) {
 
 export function installDeveloperPriceParser(chromeApi = chrome) {
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== "PARSE_HTML_DIAG" || sender.id !== chromeApi.runtime.id) return;
+    if (!PARSE_MESSAGE_TYPES.has(message?.type) ||
+        sender.id !== chromeApi.runtime.id) return;
     try {
       const doc = new DOMParser().parseFromString(message.html, "text/html");
-      const result = extractPrimaryPrice(doc);
+      let branchDiagnostic;
+      const result = extractPrimaryPrice(doc, message.type === "PARSE_HTML_BRANCH_DIAG"
+        ? report => { branchDiagnostic = report; }
+        : undefined);
       sendResponse({ ...result,
         ...(result.status === "success" ? { title: extractProductTitle(doc) } : {}),
-        diagnostics: inspectPriceDocument(doc) });
+        ...(message.type === "PARSE_HTML_DIAG" ? { diagnostics: inspectPriceDocument(doc) } : {}),
+        ...(branchDiagnostic ? { branchDiagnostic } : {}) });
     } catch {
       sendResponse({ status: "failure", errorCode: "PARSE_ERROR" });
     }
