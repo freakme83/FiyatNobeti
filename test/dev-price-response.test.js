@@ -1,16 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { extractPrimaryPrice } from "../src/price.js";
-import { inspectPriceDocument } from "../scripts/dev-price-response.js";
+import { inspectPriceDocument, inspectPrimaryPriceStructure, installDeveloperPriceParser } from "../scripts/dev-price-response.js";
 
 const LABEL_ID = "apex-pricetopay-accessibility-label";
 
 function element(tagName, { id = "", classes = [], textContent = "" } = {}) {
   const children = [];
+  let ownText = textContent;
   const node = {
+    nodeType: 1,
     tagName: tagName.toUpperCase(),
     id,
-    textContent,
+    childNodes: textContent ? [{ nodeType: 3, nodeValue: textContent }] : [],
+    get textContent() { return ownText + children.map(child => child.textContent).join(""); },
     parentElement: null,
     children,
     classList: {
@@ -21,7 +24,20 @@ function element(tagName, { id = "", classes = [], textContent = "" } = {}) {
     append(child) {
       child.parentElement = node;
       children.push(child);
+      node.childNodes.push(child);
       return child;
+    },
+    appendText(value) {
+      ownText += value;
+      node.childNodes.push({ nodeType: 3, nodeValue: value });
+      return node;
+    },
+    closest(selector) {
+      if (selector !== ".a-accordion-row") return null;
+      for (let current = this; current; current = current.parentElement) {
+        if (current.classList.contains("a-accordion-row")) return current;
+      }
+      return null;
     },
     contains(candidate) {
       for (let current = candidate; current; current = current.parentElement) {
@@ -30,8 +46,11 @@ function element(tagName, { id = "", classes = [], textContent = "" } = {}) {
       return false;
     },
     querySelectorAll(selector) {
-      if (selector !== ".a-offscreen") throw new Error(`unexpected nested selector ${selector}`);
-      return allDescendants(node).filter(child => child.classList.item && Array.from({length: child.classList.length}, (_, i) => child.classList.item(i)).includes("a-offscreen"));
+      if (selector === ".a-offscreen") {
+        return allDescendants(node).filter(child => child.classList.item && Array.from({length: child.classList.length}, (_, i) => child.classList.item(i)).includes("a-offscreen"));
+      }
+      if (selector === "h5") return allDescendants(node).filter(child => child.tagName === "H5");
+      throw new Error(`unexpected nested selector ${selector}`);
     }
   };
   return node;
@@ -98,6 +117,16 @@ const makeQualifiedLabel = (location, { extraClasses = [], labelTag = "span", la
   return identifier.append(element(labelTag, { id: LABEL_ID, textContent: labelText }));
 };
 
+const makePrimaryOffer = ({ headingText = null, price = "51.399,00TL", styleText = null, row = true, headings = 1 } = {}) => ({ core }) => {
+  const container = row ? core.append(element("div", { classes: ["a-accordion-row"] })) : core;
+  for (let index = 0; index < headings; index++) {
+    const heading = container.append(element("h5"));
+    if (index === 0 && headingText !== null) heading.appendText(headingText);
+    if (index === 0 && styleText !== null) heading.append(element("style", { textContent: styleText }));
+  }
+  container.append(element("span", { classes: ["a-offscreen"], textContent: price }));
+};
+
 test("reports capped label count, primary containment, tag, and bounded ancestry", () => {
   const { doc } = fixture({ labelTrees: [
     makeQualifiedLabel("inside", { labelText: "194,74 TL" })
@@ -146,6 +175,117 @@ test("reports a missing label with an empty inspected list", () => {
   const report = inspectPriceDocument(doc);
   assert.equal(report.alternatives.apexPriceToPayLabelCount, 0);
   assert.deepEqual(report.alternatives.apexPriceToPay.elements, []);
+});
+
+test("reports a bounded sanitized new/used structural observation without changing extraction", () => {
+  const { doc } = fixture({
+    productTitle: "SENSITIVE PRODUCT TITLE",
+    labelTrees: [
+      makePrimaryOffer({ headingText: "Yenisini Satın Al", price: "51.399,00TL", styleText: "Kullanılmış ve yeni gibi" }),
+      makePrimaryOffer({ headingText: "Kullanılmış ve yeni gibi", price: "46.647,90TL" })
+    ]
+  });
+  const parsed = extractPrimaryPrice(doc);
+  const diagnostic = inspectPrimaryPriceStructure(doc, parsed);
+  assert.deepEqual(parsed, { status: "success", priceTry: 51399 });
+  assert.equal(diagnostic.primaryCandidateCount, 2);
+  assert.deepEqual(diagnostic.candidates.map(candidate => ({
+    hasAccordionRow: candidate.hasAccordionRow,
+    rowInsidePrimaryContainer: candidate.rowInsidePrimaryContainer,
+    headingCount: candidate.headingCount,
+    classification: candidate.classification,
+    leadingDirectTextPresent: candidate.leadingDirectTextPresent,
+    priceFormatValid: candidate.priceFormatValid
+  })), [
+    { hasAccordionRow: true, rowInsidePrimaryContainer: true, headingCount: 1, classification: "new", leadingDirectTextPresent: true, priceFormatValid: true },
+    { hasAccordionRow: true, rowInsidePrimaryContainer: true, headingCount: 1, classification: "non-new", leadingDirectTextPresent: true, priceFormatValid: true }
+  ]);
+  assert.deepEqual(diagnostic.parserOutcome, { status: "success", rejectionReason: null });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|46\.647|SENSITIVE PRODUCT TITLE|Yenisini Satın Al|Kullanılmış|<style|https?:/);
+});
+
+test("reports unknown, missing-row, missing-heading and multiple-new causes with enums only", () => {
+  const cases = [
+    {
+      trees: [
+        makePrimaryOffer({ headingText: "Satın alma seçenekleri", styleText: "Yenisini Satın Al" }),
+        makePrimaryOffer({ headingText: "Kullanılmış ve yeni gibi" })
+      ],
+      reason: "OFFER_CONDITION_UNKNOWN", first: { classification: "unknown", leadingDirectTextPresent: true }
+    },
+    {
+      trees: [makePrimaryOffer({ headingText: null, row: false }), makePrimaryOffer({ headingText: "Yenisini Satın Al" })],
+      reason: "OFFER_ROW_MISSING", first: { hasAccordionRow: false, rowInsidePrimaryContainer: false, headingCount: 0, classification: "unknown", leadingDirectTextPresent: false }
+    },
+    {
+      trees: [makePrimaryOffer({ headingText: null, headings: 0 }), makePrimaryOffer({ headingText: "Yenisini Satın Al" })],
+      reason: "OFFER_HEADING_COUNT_UNEXPECTED", first: { hasAccordionRow: true, rowInsidePrimaryContainer: true, headingCount: 0, classification: "unknown", leadingDirectTextPresent: false }
+    },
+    {
+      trees: [makePrimaryOffer({ headingText: "Yenisini Satın Al" }), makePrimaryOffer({ headingText: "Yenisini Satın Al" })],
+      reason: "MULTIPLE_NEW_OFFERS", first: { classification: "new", priceFormatValid: true }
+    }
+  ];
+  for (const { trees, reason, first } of cases) {
+    const { doc } = fixture({ labelTrees: trees });
+    const parsed = extractPrimaryPrice(doc);
+    const diagnostic = inspectPrimaryPriceStructure(doc, parsed);
+    assert.equal(diagnostic.primaryCandidateCount, 2);
+    assert.deepEqual(diagnostic.parserOutcome, { status: "failure", errorCode: "PRICE_AMBIGUOUS", rejectionReason: reason });
+    assert.deepEqual(Object.fromEntries(Object.keys(first).map(key => [key, diagnostic.candidates[0][key]])), first);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|46\.647|Yenisini|Kullanılmış|style|<|https?:/);
+  }
+});
+
+test("reports malformed primary candidate format only as a boolean and keeps parser rejection", () => {
+  const { doc } = fixture({ labelTrees: [
+    makePrimaryOffer({ headingText: "Yenisini Satın Al", price: "not-a-price" })
+  ] });
+  const parsed = extractPrimaryPrice(doc);
+  const diagnostic = inspectPrimaryPriceStructure(doc, parsed);
+  assert.deepEqual(parsed, { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
+  assert.equal(diagnostic.candidates[0].priceFormatValid, false);
+  assert.deepEqual(diagnostic.parserOutcome, { status: "failure", errorCode: "PRICE_UNRECOGNIZED", rejectionReason: "PRICE_FORMAT_INVALID" });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /not-a-price/);
+});
+
+test("developer structural message returns only the sanitized observation from its parsed document", () => {
+  const { doc } = fixture({ labelTrees: [
+    makePrimaryOffer({ headingText: "Bilinmeyen teklif", price: "51.399,00TL", styleText: "Yenisini Satın Al" }),
+    makePrimaryOffer({ headingText: "Kullanılmış ve yeni gibi", price: "46.647,90TL" })
+  ] });
+  const originalParser = globalThis.DOMParser;
+  let listener;
+  let response;
+  globalThis.DOMParser = class {
+    parseFromString(html, type) {
+      assert.equal(html, "<html>PRIVATE FIXTURE</html>");
+      assert.equal(type, "text/html");
+      return doc;
+    }
+  };
+  try {
+    installDeveloperPriceParser({
+      runtime: {
+        id: "test-extension",
+        onMessage: { addListener(fn) { listener = fn; } }
+      }
+    });
+    listener(
+      { type: "PARSE_HTML_STRUCTURE_DIAG", html: "<html>PRIVATE FIXTURE</html>" },
+      { id: "test-extension" },
+      value => { response = value; }
+    );
+    assert.equal(response.errorCode, "PRICE_AMBIGUOUS");
+    assert.deepEqual(response.priceStructureDiagnostic.parserOutcome, {
+      status: "failure", errorCode: "PRICE_AMBIGUOUS", rejectionReason: "OFFER_CONDITION_UNKNOWN"
+    });
+    assert.doesNotMatch(JSON.stringify(response.priceStructureDiagnostic), /PRIVATE|51\.399|46\.647|Bilinmeyen|Kullanılmış|https?:|<html/);
+    assert.equal(Object.hasOwn(response.priceStructureDiagnostic, "diagnostics"), false);
+    assert.equal(Object.hasOwn(response.priceStructureDiagnostic, "title"), false);
+  } finally {
+    globalThis.DOMParser = originalParser;
+  }
 });
 
 test("identifies recognized payable-price and purchase ancestry using exact allowlisted tokens", () => {

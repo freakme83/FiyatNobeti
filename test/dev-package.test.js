@@ -19,6 +19,7 @@ test("production manifest excludes the developer console entry point", async () 
   assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
   assert.equal((await readFile(resolve(root, "offscreen.html"), "utf8")).includes("offscreen.dev.js"), false);
   assert.equal((await readFile(resolve(root, "background.js"), "utf8")).includes("fiyatNobetiDev"), false);
+  assert.equal((await readFile(resolve(root, "offscreen.js"), "utf8")).includes("PARSE_HTML_STRUCTURE_DIAG"), false);
 });
 
 test("developer preparation creates an isolated manifest that enables the console entry point", async () => {
@@ -34,12 +35,15 @@ test("developer preparation creates an isolated manifest that enables the consol
     assert.match(developerBackground, /diagnoseProduct: diagnoseProductForDev/);
     assert.match(developerBackground, /getAutomaticCheckDiagnostics/);
     assert.match(developerBackground, /testPriceDropNotification: notificationTest\.testPriceDropNotification/);
+    assert.match(developerBackground, /setDeveloperPriceStructureObserverForDev/);
+    assert.match(developerBackground, /getLastPriceStructureDiagnostic/);
     assert.match(developerBackground, /installDeveloperPriceDropNotificationTest/);
     assert.doesNotMatch(developerBackground, /notificationTest\.testPriceDropNotification\(\)/);
     assert.equal(manifest.permissions.includes("notifications"), true);
     assert.equal((await readFile(resolve(target, "scripts/dev-price-drop-notification.js"), "utf8")).includes("SYNTHETIC NOTIFICATION TEST"), true);
     assert.match(await readFile(resolve(target, "offscreen.html"), "utf8"), /offscreen.dev.js/);
     assert.match(await readFile(resolve(target, "offscreen.dev.js"), "utf8"), /installDeveloperPriceParser/);
+    assert.match(await readFile(resolve(target, "scripts/dev-price-response.js"), "utf8"), /PARSE_HTML_STRUCTURE_DIAG/);
     assert.match(await readFile(resolve(target, "dev-automatic-alarm.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
 
     const productionManifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));

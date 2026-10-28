@@ -7,6 +7,10 @@ const MAX_QUALIFICATION_DEPTH = 32;
 const MAX_CLASSES_SCANNED = 128;
 const MAX_RECOGNIZED_CLASSES_PER_NODE = 8;
 const MAX_REGION_TOKENS = 5;
+const MAX_PRIMARY_CANDIDATES = 40;
+const MAX_HEADINGS_PER_ROW = 20;
+const NEW_OFFER_LABEL = /^Yenisini Satın Al(?:$|[\s:·–—])/iu;
+const NON_NEW_OFFER_LABEL = /^(?:Kullanılmış|Yenilenmiş|İkinci el|Used|Refurbished|Renewed|Second hand)(?:$|[\s:·–—])/iu;
 
 // Only exact, stable Amazon layout tokens may leave the diagnostic.
 const SAFE_IDS = new Set([
@@ -221,12 +225,116 @@ export function inspectPriceDocument(doc) {
   };
 }
 
+function leadingDirectHeadingText(heading) {
+  let text = "";
+  let hasLeadingText = false;
+  for (const child of heading?.childNodes || []) {
+    if (child.nodeType === 3) {
+      const value = child.nodeValue || "";
+      text += ` ${value}`;
+      if (value.trim()) hasLeadingText = true;
+      continue;
+    }
+    if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
+    break;
+  }
+  return { text: text.replace(/\s+/g, " ").trim(), hasLeadingText };
+}
+
+function primaryOfferCondition(candidate, primaryContainer) {
+  const row = candidate?.closest?.(".a-accordion-row");
+  if (!row) {
+    return {
+      hasAccordionRow: false, rowInsidePrimaryContainer: false, headingCount: 0,
+      classification: "unknown", leadingDirectTextPresent: false
+    };
+  }
+  const rowInsidePrimaryContainer = Boolean(primaryContainer?.contains?.(row));
+  const headings = [...row.querySelectorAll("h5")];
+  const boundedHeadings = headings.slice(0, MAX_HEADINGS_PER_ROW);
+  const heading = boundedHeadings.length === 1 ? boundedHeadings[0] : null;
+  const directText = leadingDirectHeadingText(heading);
+  let classification = "unknown";
+  if (rowInsidePrimaryContainer && heading) {
+    if (NEW_OFFER_LABEL.test(directText.text)) classification = "new";
+    else if (NON_NEW_OFFER_LABEL.test(directText.text)) classification = "non-new";
+  }
+  return {
+    hasAccordionRow: true,
+    rowInsidePrimaryContainer,
+    headingCount: Math.min(headings.length, MAX_HEADINGS_PER_ROW),
+    ...(headings.length > MAX_HEADINGS_PER_ROW ? { headingCountTruncated: true } : {}),
+    classification,
+    leadingDirectTextPresent: directText.hasLeadingText
+  };
+}
+
+function parserRejectionReason(parsed, candidates) {
+  if (parsed.status === "success") return null;
+  if (parsed.errorCode === "PRICE_AMBIGUOUS") {
+    const unknown = candidates.find(candidate => candidate.classification === "unknown");
+    if (unknown) {
+      if (!unknown.hasAccordionRow) return "OFFER_ROW_MISSING";
+      if (!unknown.rowInsidePrimaryContainer) return "OFFER_ROW_OUTSIDE_PRIMARY_CONTAINER";
+      if (unknown.headingCount !== 1) return "OFFER_HEADING_COUNT_UNEXPECTED";
+      if (!unknown.leadingDirectTextPresent) return "OFFER_HEADING_LEADING_TEXT_MISSING";
+      return "OFFER_CONDITION_UNKNOWN";
+    }
+    if (candidates.filter(candidate => candidate.classification === "new").length > 1) return "MULTIPLE_NEW_OFFERS";
+    return "PARSER_PRICE_AMBIGUOUS";
+  }
+  if (parsed.errorCode === "PRICE_MISSING" && candidates.length &&
+      candidates.every(candidate => candidate.classification === "non-new")) return "NO_NEW_OFFER";
+  if (parsed.errorCode === "PRICE_UNRECOGNIZED") return "PRICE_FORMAT_INVALID";
+  return parsed.errorCode || "PARSER_REJECTED";
+}
+
+export function inspectPrimaryPriceStructure(doc, parsed = extractPrimaryPrice(doc)) {
+  const primaryContainer = doc.querySelector("#corePrice_feature_div");
+  const allCandidates = primaryContainer
+    ? [...primaryContainer.querySelectorAll(".a-offscreen")].filter(candidate => {
+      let ancestor = candidate.parentElement;
+      for (let depth = 0; ancestor && depth < 6; depth++, ancestor = ancestor.parentElement) {
+        const classes = ancestor.classList;
+        if (!classes || !Number.isInteger(classes.length) || typeof classes.item !== "function") continue;
+        for (let index = 0; index < classes.length; index++) {
+          if (typeof classes.item(index) === "string" && classes.item(index).startsWith("apex-priceperuni")) return false;
+        }
+      }
+      return true;
+    })
+    : [];
+  const inspectedCandidates = allCandidates.map(candidate => ({
+    ...primaryOfferCondition(candidate, primaryContainer),
+    priceFormatValid: parseTurkishPrice(typeof candidate.textContent === "string" ? candidate.textContent : "") !== null
+  }));
+  const candidates = inspectedCandidates.slice(0, MAX_PRIMARY_CANDIDATES);
+  return {
+    primaryCandidateCount: Math.min(allCandidates.length, MAX_PRIMARY_CANDIDATES),
+    ...(allCandidates.length > MAX_PRIMARY_CANDIDATES ? { primaryCandidateCountTruncated: true } : {}),
+    candidates,
+    parserOutcome: {
+      status: parsed.status === "success" ? "success" : "failure",
+      ...(typeof parsed.errorCode === "string" && /^[A-Z0-9_]{1,40}$/.test(parsed.errorCode) ? { errorCode: parsed.errorCode } : {}),
+      rejectionReason: parserRejectionReason(parsed, inspectedCandidates)
+    }
+  };
+}
+
 export function installDeveloperPriceParser(chromeApi = chrome) {
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== "PARSE_HTML_DIAG" || sender.id !== chromeApi.runtime.id) return;
+    if (!["PARSE_HTML_DIAG", "PARSE_HTML_STRUCTURE_DIAG"].includes(message?.type) || sender.id !== chromeApi.runtime.id) return;
     try {
       const doc = new DOMParser().parseFromString(message.html, "text/html");
       const result = extractPrimaryPrice(doc);
+      if (message.type === "PARSE_HTML_STRUCTURE_DIAG") {
+        sendResponse({
+          ...result,
+          ...(result.status === "success" ? { title: extractProductTitle(doc) } : {}),
+          priceStructureDiagnostic: inspectPrimaryPriceStructure(doc, result)
+        });
+        return;
+      }
       sendResponse({ ...result,
         ...(result.status === "success" ? { title: extractProductTitle(doc) } : {}),
         diagnostics: inspectPriceDocument(doc) });

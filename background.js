@@ -37,12 +37,17 @@ const productInstances = new Map();
 let nextProductInstance = 0;
 let automaticRun;
 let developerEventRecorder;
+let developerPriceStructureObserver;
 let pendingAutomaticAlarm;
 let recoveryFailed = false;
 let startupRecovery;
 
 export function setDeveloperEventRecorderForDev(record) {
   developerEventRecorder = typeof record === "function" ? record : undefined;
+}
+
+export function setDeveloperPriceStructureObserverForDev(observe) {
+  developerPriceStructureObserver = typeof observe === "function" ? observe : undefined;
 }
 
 function recordDeveloperEvent(event) {
@@ -105,7 +110,7 @@ function classifyResponseUrl(value) {
   } catch { return "UNAVAILABLE"; }
 }
 
-async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false } = {}) {
+async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false, observePriceStructure = false } = {}) {
   if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
     return { status: "failure", errorCode: "PERMISSION_REQUIRED" };
   }
@@ -136,7 +141,13 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
     }
     const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
-    const parsed = await chrome.runtime.sendMessage({ type: developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML", html });
+    const capturePriceStructure = !developerParse && observePriceStructure && typeof developerPriceStructureObserver === "function";
+    const parseType = developerParse ? "PARSE_HTML_DIAG" : capturePriceStructure ? "PARSE_HTML_STRUCTURE_DIAG" : "PARSE_HTML";
+    const parsed = await chrome.runtime.sendMessage({ type: parseType, html });
+    if (capturePriceStructure && parsed?.priceStructureDiagnostic) {
+      try { developerPriceStructureObserver(parsed.priceStructureDiagnostic); }
+      catch { /* The developer-only structural observation cannot affect a price check. */ }
+    }
     if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
@@ -358,6 +369,7 @@ async function checkWatchlistProduct(asin, {
     let requestStarted = false;
     const fetched = await fetchProduct(start.canonicalUrl, {
       diagnostic: responseDiagnostic,
+      observePriceStructure: !automatic,
       onRequestStart: async () => {
         if (!automatic) {
           try {
