@@ -163,51 +163,36 @@ function primaryOfferCondition(candidate, primaryContainer) {
   return { inOfferRow: true, condition: "unknown" };
 }
 
-// This opt-in presentation path requires positive product and payable-price
-// evidence for each row. Missing or complicated markup remains ambiguous.
-function unverifiedCandidates(doc, expectedAsin, candidates, containers, conditions) {
-  if (!/^[A-Z0-9]{10}$/.test(expectedAsin || "") || candidates.length !== 2 ||
-      conditions.some(item => item.condition === "non-new")) return null;
+// Informational only: a pair is never a trusted new-product price.
+// Require two distinct price regions and offer rows, but do not require Amazon's
+// optional ASIN/payable classes for an explicitly unverified presentation.
+function unverifiedCandidates(doc, expectedAsin, candidates, containers) {
+  if (!/^[A-Z0-9]{10}$/.test(expectedAsin || "") || candidates.length !== 2) return null;
   const identities = [...doc.querySelectorAll("#ASIN")];
-  if (identities.length !== 1 || identities[0].tagName !== "INPUT" ||
-      identities[0].getAttribute("type")?.toLowerCase() !== "hidden" ||
-      identities[0].getAttribute("value") !== expectedAsin) return null;
+  if (identities.some(node => node.getAttribute("value") && node.getAttribute("value") !== expectedAsin)) return null;
   const rows = candidates.map(candidate => candidate.closest?.(".a-accordion-row"));
-  if (!rows[0] || !rows[1] || rows[0] === rows[1] || rows[0].contains(rows[1]) || rows[1].contains(rows[0]) ||
+  if (!rows[0] || !rows[1] || rows[0] === rows[1] ||
+      rows[0].contains(rows[1]) || rows[1].contains(rows[0]) ||
       !containers[0] || !containers[1] || containers[0] === containers[1] ||
       containers[0].contains(containers[1]) || containers[1].contains(containers[0])) return null;
-  for (let index = 0; index < 2; index++) {
+  for (let index = 0; index <2; index++) {
     const candidate = candidates[index];
     const container = containers[index];
     const row = rows[index];
-    if (!row.contains(container) || !container.contains(candidate) ||
-        row.getAttribute("data-asin") !== expectedAsin || candidate.tagName !== "SPAN" ||
-        !candidate.parentElement?.classList?.contains("a-price") ||
-        !["apex-pricetopay-value", "priceToPay"].some(token => candidate.parentElement.classList.contains(token))) return null;
-    if ([...row.querySelectorAll("[data-asin]")].some(node => node.getAttribute("data-asin") !== expectedAsin)) return null;
-    let node = candidate;
-    let depth = 0;
-    for (; node && node !== row && depth < 32; node = node.parentElement, depth++) {}
-    if (node !== row) return null;
-    // Reject explicitly non-new language anywhere in this offer row; never use
-    // that text to infer that either candidate is a new-product offer.
-    const stack = [row];
-    let text = "";
-    let visited = 0;
-    while (stack.length) {
-      const current = stack.pop();
-      if (++visited > 500 || text.length > 5000) return null;
-      if (current.nodeType === 3) text += ` ${current.nodeValue || ""}`;
-      else if (!["STYLE", "SCRIPT"].includes(current.tagName)) {
-        if (["S", "DEL", "STRIKE"].includes(current.tagName) ||
-            current.getAttribute?.("data-a-strike")?.toLowerCase() === "true" ||
-            /(?:reference|strike|was.?price|a-text-price|variant|twister|swatch)/i.test(`${current.id || ""} ${classNames(current)}`) ||
-            EXCLUDED_PRICE_CONTEXT.test(`${current.id || ""} ${classNames(current)}`)) return null;
-        stack.push(...[...(current.childNodes || [])].reverse());
-      }
+    if (!row.contains(container) || !container.contains(candidate) || candidate.tagName !== "SPAN") return null;
+    // A row's explicitly declared identity must agree, if Amazon provides one.
+    for (const node of [row, ...row.querySelectorAll("[data-asin]")]) {
+      const asin = node.getAttribute?.("data-asin");
+      if (asin && asin !== expectedAsin) return null;
     }
-    const compactText = text.replace(/\s+/g, "").toLocaleLowerCase("tr-TR");
-    if (/(?:kullanılmış|yenilenmiş|ikinciel|teşhir|açıkkutu|used|refurbished|renewed|reconditioned|secondhand|preowned|openbox)/u.test(compactText)) return null;
+    // Reject reference/strike/variant contexts, including ancestors of the
+    // price and the region itself. Used offers remain displayable, never trusted.
+    for (let node = candidate; node; node = node.parentElement) {
+      if (["S", "DEL", "STRIKE"].includes(node.tagName) ||
+          node.getAttribute?.("data-a-strike")?.toLowerCase() === "true" ||
+          /(?:reference|strike|was.?price|a-text-price|variant|twister|swatch|list.?price)/i.test(`${node.id || ""} ${classNames(node)}`)) return null;
+      if (node === row) break;
+    }
   }
   return normalizeCandidatePrices(candidates.map(candidate => parseTurkishPrice(candidate.textContent)));
 }
@@ -284,12 +269,12 @@ export function extractPrimaryPrice(doc, expectedAsin = null) {
     const nonNewOfferCount = conditions.filter(({ condition }) => condition === "non-new").length;
     const unknownOfferCount = conditions.filter(({ condition }) => condition === "unknown").length;
     if (unknownOfferCount > 0) {
-      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers, conditions);
+      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers);
       return { status: "failure", errorCode: "PRICE_AMBIGUOUS", ...(candidatePricesTry ? { candidatePricesTry } : {}) };
     }
     const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
     if (newIndexes.length > 1) {
-      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers, conditions);
+      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers);
       return { status: "failure", errorCode: "PRICE_AMBIGUOUS", ...(candidatePricesTry ? { candidatePricesTry } : {}) };
     }
     if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
