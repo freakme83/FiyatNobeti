@@ -20,7 +20,6 @@ const DEV_BACKGROUND_SOURCE = `import {
   runAutomaticAlarmTestForDev,
   runOneAutomaticCheckForDev,
   diagnoseProductForDev,
-  getLastPriceParserAmbiguityForDev,
   setDeveloperEventRecorderForDev
 } from "./background.js";
 import { installDeveloperAutomaticAlarmTest } from "./dev-automatic-alarm.js";
@@ -45,7 +44,6 @@ Object.defineProperty(globalThis, "fiyatNobetiDev", {
     getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest,
     getAutomaticCheckDiagnostics: observability.getAutomaticCheckDiagnostics,
     diagnoseProduct: diagnoseProductForDev,
-    getLastPriceParserAmbiguity: getLastPriceParserAmbiguityForDev,
     testPriceDropNotification: notificationTest.testPriceDropNotification
   }),
   enumerable: true,

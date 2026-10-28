@@ -98,8 +98,8 @@ function fixture(html) {
       if (selector === "form[action]") return findAll(root, node => node.tagName === "FORM" && node.getAttribute("action") !== null);
       if (selector === "p, label, h1, h2, h3") return findAll(root, node => ["P", "LABEL", "H1", "H2", "H3"].includes(node.tagName));
       if (selector === "#corePrice_feature_div .a-offscreen") {
-        return findAll(root, node => node.id === "corePrice_feature_div")
-          .flatMap(core => findAll(core, node => node.classList.contains("a-offscreen")));
+        return [...new Set(findAll(root, node => node.id === "corePrice_feature_div")
+          .flatMap(core => findAll(core, node => node.classList.contains("a-offscreen"))))];
       }
       if (selector === "#apex-pricetopay-accessibility-label") {
         return findAll(root, node => node.id === "apex-pricetopay-accessibility-label");
@@ -334,96 +334,29 @@ test("an ordinary single-price page remains successful", () => {
     { status: "success", priceTry: 51399 });
 });
 
-test("ambiguity callback identifies the primary-candidate parser branch with bounded counts", () => {
-  const doc = fixture(`<div id="corePrice_feature_div">
-    <div class="a-accordion-row"><h5>Yenisini Satın Al</h5><span class="a-offscreen">51.399,00TL</span></div>
-    <div class="a-accordion-row"><h5>Kullanılmış</h5><span class="a-offscreen">46.647,90TL</span></div>
-    <div class="a-accordion-row"><h5>Satın alma seçenekleri</h5><span class="a-offscreen">49.000,00TL</span></div>
-  </div>`);
-  let diagnostic;
-  const result = extractPrimaryPrice(doc, value => { diagnostic = value; });
-  assert.deepEqual(result, { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
-  assert.deepEqual(diagnostic, {
-    errorCode: "PRICE_AMBIGUOUS",
-    source: "PRIMARY_MULTIPLE_UNKNOWN",
-    primaryCandidateCount: 3,
-    fallbackCandidateCount: null,
-    newOfferCount: 1,
-    nonNewOfferCount: 1,
-    unknownOfferCount: 1,
-    primaryContainerCount: 1,
-    candidates: [
-      { priceFormatValid: true, sameParsedAmount: false, isStrikePrice: false, isPriceToPay: false, hasAccordionRow: true, sameAccordionRow: false, headingCount: 1, unknownReason: "NOT_UNKNOWN", headingStopTag: null, candidateInsideSelectedPrimaryContainer: true },
-      { priceFormatValid: true, sameParsedAmount: false, isStrikePrice: false, isPriceToPay: false, hasAccordionRow: true, sameAccordionRow: false, headingCount: 1, unknownReason: "NOT_UNKNOWN", headingStopTag: null, candidateInsideSelectedPrimaryContainer: true },
-      { priceFormatValid: true, sameParsedAmount: false, isStrikePrice: false, isPriceToPay: false, hasAccordionRow: true, sameAccordionRow: false, headingCount: 1, unknownReason: "HEADING_LABEL_UNRECOGNIZED", headingStopTag: null, candidateInsideSelectedPrimaryContainer: true }
-    ]
-  });
-  assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|46\.647|49\.000|Yenisini|Kullanılmış/);
+test("duplicate and overlapping primary containers select the uniquely labeled new offer once", () => {
+  const doc = fixture(`
+    <div class="a-accordion-row"><h5><div>Kullanılmış ve yeni gibi</div></h5>
+      <div id="corePrice_feature_div"><span class="a-offscreen">46.647,90TL</span></div></div>
+    <div class="a-accordion-row"><h5><div>Yenisini Satın Al<style>.hidden { display:none }</style></div></h5>
+      <div id="corePrice_feature_div"><div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
 });
 
-test("primary ambiguity identifies payable and struck-through candidate contexts without prices", () => {
-  const doc = fixture(`<div id="corePrice_feature_div">
-    <div class="priceToPay"><span class="a-offscreen">51.399,00TL</span></div>
-    <div class="a-text-price" data-a-strike="true"><span class="a-offscreen">46.647,90TL</span></div>
-  </div>`);
-  let diagnostic;
-  assert.deepEqual(extractPrimaryPrice(doc, value => { diagnostic = value; }), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
-  assert.equal(diagnostic.candidates[0].isPriceToPay, true);
-  assert.equal(diagnostic.candidates[0].isStrikePrice, false);
-  assert.equal(diagnostic.candidates[1].isPriceToPay, false);
-  assert.equal(diagnostic.candidates[1].isStrikePrice, true);
-  assert.ok(diagnostic.candidates.every(candidate => candidate.unknownReason === "ROW_MISSING"));
-  assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|46\.647/);
+test("a simple direct DIV heading wrapper identifies the offer without reading unrelated row text", () => {
+  const doc = fixture(`<div class="a-accordion-row"><h5><div>Yenisini Satın Al</div></h5>
+    <div>Used offer details are unrelated to the heading</div>
+    <div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
 });
 
-test("equal parsed primary prices are identified and candidate detail is capped at four", () => {
-  const candidates = Array.from({ length: 5 }, () => `<div class="a-accordion-row"><h5>Seçenekleri görüntüle</h5><span class="a-offscreen">51.399,00TL</span></div>`).join("");
-  let diagnostic;
-  const result = extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${candidates}</div>`), value => { diagnostic = value; });
-  assert.deepEqual(result, { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
-  assert.equal(diagnostic.primaryCandidateCount, 5);
-  assert.equal(diagnostic.candidates.length, 4);
-  assert.ok(diagnostic.candidates.every(candidate => candidate.sameParsedAmount));
-  assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|Seçenekleri/);
-});
-
-test("shared unreadable accordion heading is reported without exposing its markup", () => {
-  const doc = fixture(`<div id="corePrice_feature_div"><div class="a-accordion-row">
-    <h5><span><img src="private-image-marker"></span></h5>
-    <span class="a-offscreen">51.399,00TL</span><span class="a-offscreen">46.647,90TL</span>
-  </div></div>`);
-  let diagnostic;
-  assert.deepEqual(extractPrimaryPrice(doc, value => { diagnostic = value; }), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
-  assert.ok(diagnostic.candidates.every(candidate => candidate.sameAccordionRow));
-  assert.ok(diagnostic.candidates.every(candidate => candidate.unknownReason === "HEADING_TEXT_UNREADABLE"));
-  assert.ok(diagnostic.candidates.every(candidate => candidate.headingStopTag === "IMG"));
-  assert.doesNotMatch(JSON.stringify(diagnostic), /51\.399|46\.647|private-image-marker|<img/i);
-});
-
-test("multiple primary containers report containment against the selected first container", () => {
-  const doc = fixture(`<div id="corePrice_feature_div"><div class="a-accordion-row"><h5>Seçenekler</h5><span class="a-offscreen">51.399,00TL</span></div></div>
-    <div id="corePrice_feature_div"><div class="a-accordion-row"><h5>Seçenekler</h5><span class="a-offscreen">46.647,90TL</span></div></div>`);
-  let diagnostic;
-  assert.deepEqual(extractPrimaryPrice(doc, value => { diagnostic = value; }), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
-  assert.equal(diagnostic.primaryContainerCount, 2);
-  assert.deepEqual(diagnostic.candidates.map(candidate => candidate.candidateInsideSelectedPrimaryContainer), [true, false]);
-  assert.deepEqual(diagnostic.candidates.map(candidate => candidate.unknownReason), ["HEADING_LABEL_UNRECOGNIZED", "ROW_RELATION_INVALID"]);
-});
-
-test("ambiguity callback identifies multiple fallback labels without changing parser result", () => {
-  const doc = fixture(`<div id="corePrice_feature_div"></div>${payableMarkup("194,74 TL")}${payableMarkup("199,00 TL")}`);
-  let diagnostic;
-  const result = extractPrimaryPrice(doc, value => { diagnostic = value; });
-  assert.deepEqual(result, { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
-  assert.deepEqual(diagnostic, {
-    errorCode: "PRICE_AMBIGUOUS",
-    source: "FALLBACK_MULTIPLE",
-    primaryCandidateCount: 0,
-    fallbackCandidateCount: 2,
-    newOfferCount: 0,
-    nonNewOfferCount: 0,
-    unknownOfferCount: 0
-  });
+test("unknown or nested conflicting offer labels across primary containers remain ambiguous", () => {
+  const doc = fixture(`
+    <div class="a-accordion-row"><h5><div><span>Yenisini Satın Al</span></div></h5>
+      <div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div></div>
+    <div class="a-accordion-row"><h5><div>Diğer seçenek</div></h5>
+      <div id="corePrice_feature_div"><span class="a-offscreen">46.647,90TL</span></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
 });
 
 test("classifies bot checks, access denied, and sign-in pages before price extraction", () => {

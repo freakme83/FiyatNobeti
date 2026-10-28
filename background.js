@@ -30,15 +30,6 @@ const SHORT_LINK_ERROR_CODES = new Set([
   "SHORT_LINK_FINAL_URL_INVALID", "SHORT_LINK_UNSUPPORTED_PRODUCT_URL"
 ]);
 const SHORT_LINK_RESPONSE_TYPES = new Set(["basic", "cors", "default", "error", "opaque", "opaqueredirect"]);
-const PARSER_AMBIGUITY_SOURCES = new Set(["PRIMARY_MULTIPLE_UNKNOWN", "PRIMARY_MULTIPLE_NEW", "FALLBACK_MULTIPLE", "OTHER"]);
-const PARSER_UNKNOWN_REASONS = new Set([
-  "NOT_UNKNOWN", "ROW_MISSING", "ROW_RELATION_INVALID", "HEADING_COUNT_UNEXPECTED",
-  "HEADING_TEXT_UNREADABLE", "HEADING_LABEL_UNRECOGNIZED"
-]);
-const PARSER_STOP_TAGS = new Set([
-  "A", "B", "BR", "DIV", "EM", "I", "IMG", "INPUT", "PICTURE", "SCRIPT", "SMALL",
-  "SPAN", "STYLE", "SUB", "SUP", "SVG", "OTHER"
-]);
 let creatingOffscreen;
 let watchlistMutationQueue = Promise.resolve();
 const inFlightChecks = new Map();
@@ -46,64 +37,12 @@ const productInstances = new Map();
 let nextProductInstance = 0;
 let automaticRun;
 let developerEventRecorder;
-let lastDeveloperPriceParserAmbiguity = null;
-let lastDeveloperPriceParserAmbiguityAsin = null;
 let pendingAutomaticAlarm;
 let recoveryFailed = false;
 let startupRecovery;
 
 export function setDeveloperEventRecorderForDev(record) {
   developerEventRecorder = typeof record === "function" ? record : undefined;
-}
-
-export function getLastPriceParserAmbiguityForDev() {
-  const report = lastDeveloperPriceParserAmbiguity;
-  return report ? {
-    ...report,
-    ...(report.candidates ? { candidates: report.candidates.map(candidate => ({ ...candidate })) } : {})
-  } : null;
-}
-
-function normalizeParserAmbiguity(value) {
-  if (value?.errorCode !== "PRICE_AMBIGUOUS" || !PARSER_AMBIGUITY_SOURCES.has(value.source)) return null;
-  const report = { errorCode: "PRICE_AMBIGUOUS", source: value.source };
-  for (const key of ["primaryCandidateCount", "newOfferCount", "nonNewOfferCount", "unknownOfferCount"]) {
-    if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > 100) return null;
-    report[key] = value[key];
-  }
-  if (value.fallbackCandidateCount === null && value.source !== "FALLBACK_MULTIPLE") {
-    report.fallbackCandidateCount = null;
-  } else if (Number.isInteger(value.fallbackCandidateCount) && value.fallbackCandidateCount >= 0 && value.fallbackCandidateCount <= 100) {
-    report.fallbackCandidateCount = value.fallbackCandidateCount;
-  } else return null;
-  if (value.source === "PRIMARY_MULTIPLE_UNKNOWN") {
-    if (!Number.isInteger(value.primaryContainerCount) || value.primaryContainerCount < 0 || value.primaryContainerCount > 100 ||
-        !Array.isArray(value.candidates) || value.candidates.length > 4) return null;
-    const candidates = value.candidates.map(candidate => {
-      if (!candidate || typeof candidate !== "object" ||
-          !["priceFormatValid", "sameParsedAmount", "isStrikePrice", "isPriceToPay", "hasAccordionRow", "sameAccordionRow", "candidateInsideSelectedPrimaryContainer"]
-            .every(key => typeof candidate[key] === "boolean") ||
-          !Number.isInteger(candidate.headingCount) || candidate.headingCount < 0 || candidate.headingCount > 10 ||
-          !PARSER_UNKNOWN_REASONS.has(candidate.unknownReason) ||
-          candidate.headingStopTag !== null && !PARSER_STOP_TAGS.has(candidate.headingStopTag)) return null;
-      return {
-        priceFormatValid: candidate.priceFormatValid,
-        sameParsedAmount: candidate.sameParsedAmount,
-        isStrikePrice: candidate.isStrikePrice,
-        isPriceToPay: candidate.isPriceToPay,
-        hasAccordionRow: candidate.hasAccordionRow,
-        sameAccordionRow: candidate.sameAccordionRow,
-        headingCount: candidate.headingCount,
-        unknownReason: candidate.unknownReason,
-        headingStopTag: candidate.headingStopTag,
-        candidateInsideSelectedPrimaryContainer: candidate.candidateInsideSelectedPrimaryContainer
-      };
-    });
-    if (candidates.some(candidate => candidate === null)) return null;
-    report.primaryContainerCount = value.primaryContainerCount;
-    report.candidates = candidates;
-  }
-  return report;
 }
 
 function recordDeveloperEvent(event) {
@@ -166,7 +105,7 @@ function classifyResponseUrl(value) {
   } catch { return "UNAVAILABLE"; }
 }
 
-async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false, captureParserAmbiguity = false, parserDiagnosticAsin = null } = {}) {
+async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, developerParse = false } = {}) {
   if (!await chrome.permissions.contains({ origins: [AMAZON_ORIGIN] })) {
     return { status: "failure", errorCode: "PERMISSION_REQUIRED" };
   }
@@ -174,11 +113,6 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
     if (await onRequestStart?.() === false) return { status: "failure", errorCode: "CHECK_CANCELLED" };
-    const captureAmbiguity = captureParserAmbiguity && Boolean(developerEventRecorder);
-    if (captureAmbiguity && parserDiagnosticAsin === lastDeveloperPriceParserAmbiguityAsin) {
-      lastDeveloperPriceParserAmbiguity = null;
-      lastDeveloperPriceParserAmbiguityAsin = null;
-    }
     const response = await fetch(canonicalUrl, {
       credentials: "omit",
       cache: "no-store",
@@ -202,15 +136,8 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
     }
     const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
-    const parseType = captureAmbiguity ? "PARSE_HTML_BRANCH_DIAG" : developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML";
+    const parseType = developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML";
     const parsed = await chrome.runtime.sendMessage({ type: parseType, html });
-    if (captureAmbiguity) {
-      const report = normalizeParserAmbiguity(parsed?.branchDiagnostic);
-      if (report) {
-        lastDeveloperPriceParserAmbiguity = report;
-        lastDeveloperPriceParserAmbiguityAsin = parserDiagnosticAsin;
-      }
-    }
     if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
@@ -381,8 +308,7 @@ async function checkWatchlistProduct(asin, {
   automatic = false,
   expectedIdentity,
   bypassEligibility = false,
-  onRequestStart,
-  captureParserAmbiguity = false
+  onRequestStart
 } = {}) {
   if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) return { status: "failure", errorCode: "INVALID_PRODUCT" };
   asin = asin.toUpperCase();
@@ -433,8 +359,6 @@ async function checkWatchlistProduct(asin, {
     let requestStarted = false;
     const fetched = await fetchProduct(start.canonicalUrl, {
       diagnostic: responseDiagnostic,
-      captureParserAmbiguity: captureParserAmbiguity && !automatic,
-      parserDiagnosticAsin: captureParserAmbiguity && !automatic ? asin : null,
       onRequestStart: async () => {
         if (!automatic) {
           try {
@@ -946,7 +870,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "CHECK_PRICE") runOperation = () => probe(message.url);
   else if (message?.type === "GET_WATCHLIST") runOperation = () => getWatchlist();
   else if (message?.type === "ADD_PRODUCT") runOperation = () => addProduct(message.url);
-  else if (message?.type === "CHECK_PRODUCT") runOperation = () => checkWatchlistProduct(message.asin, { captureParserAmbiguity: true });
+  else if (message?.type === "CHECK_PRODUCT") runOperation = () => checkWatchlistProduct(message.asin);
   else if (message?.type === "REMOVE_PRODUCT") runOperation = () => removeProduct(message.asin);
   else if (message?.type === "GET_AUTO_SETTINGS") runOperation = () => getAutoSettings();
   else if (message?.type === "SET_AUTO_ENABLED") runOperation = () => setAutoEnabled(message.enabled);

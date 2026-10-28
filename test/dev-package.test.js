@@ -18,8 +18,8 @@ test("production manifest excludes the developer console entry point", async () 
   assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /chrome\.notifications|presentPriceDropNotification|testPriceDropNotification/);
   assert.doesNotMatch(await readFile(resolve(root, "background.js"), "utf8"), /fiyatnobeti:dev:automatic-check-test:/);
   assert.equal((await readFile(resolve(root, "offscreen.html"), "utf8")).includes("offscreen.dev.js"), false);
-  assert.doesNotMatch(await readFile(resolve(root, "offscreen.js"), "utf8"), /PARSE_HTML_BRANCH_DIAG/);
   assert.equal((await readFile(resolve(root, "background.js"), "utf8")).includes("fiyatNobetiDev"), false);
+  assert.doesNotMatch(await readFile(resolve(root, "scripts/dev-price-response.js"), "utf8"), /PARSE_HTML_BRANCH_DIAG|branchDiagnostic/);
 });
 
 test("developer preparation creates an isolated manifest that enables the console entry point", async () => {
@@ -33,7 +33,7 @@ test("developer preparation creates an isolated manifest that enables the consol
     assert.match(developerBackground, /scheduleOneAutomaticCheckTest/);
     assert.match(developerBackground, /getLastAutomaticAlarmTest/);
     assert.match(developerBackground, /diagnoseProduct: diagnoseProductForDev/);
-    assert.match(developerBackground, /getLastPriceParserAmbiguity: getLastPriceParserAmbiguityForDev/);
+    assert.doesNotMatch(developerBackground, /getLastPriceParserAmbiguity|PriceParserAmbiguity/);
     assert.match(developerBackground, /getAutomaticCheckDiagnostics/);
     assert.match(developerBackground, /testPriceDropNotification: notificationTest\.testPriceDropNotification/);
     assert.match(developerBackground, /installDeveloperPriceDropNotificationTest/);

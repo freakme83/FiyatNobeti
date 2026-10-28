@@ -5,46 +5,6 @@ const MAX_PRICE_ANCESTORS = 6;
 const EXCLUDED_PRICE_CONTEXT = /(?:coupon|shipping|installment|monthly|used|other.?seller|recommend|similar|variation|format|unit|discount|list.?price)/i;
 const NEW_OFFER_LABEL = /^Yenisini Satın Al(?:$|[\s:·–—])/iu;
 const NON_NEW_OFFER_LABEL = /^(?:Kullanılmış|Yenilenmiş|İkinci el|Used|Refurbished|Renewed|Second hand)(?:$|[\s:·–—])/iu;
-const MAX_AMBIGUITY_DIAGNOSTIC_COUNT = 100;
-const MAX_PRIMARY_CANDIDATE_DIAGNOSTICS = 4;
-const MAX_DIAGNOSTIC_ANCESTRY_DEPTH = 32;
-const MAX_DIAGNOSTIC_HEADING_COUNT = 10;
-const STOP_TAG_NAMES = new Set(["A", "B", "BR", "DIV", "EM", "I", "IMG", "INPUT", "PICTURE", "SCRIPT", "SMALL", "SPAN", "STYLE", "SUB", "SUP", "SVG"]);
-const PAYABLE_CONTEXT_IDS = new Set([
-  "apex-pricetopay-accessibility-label", "apex-pricetopay_feature_div", "apex_pricetopay_feature_div"
-]);
-
-function reportPriceAmbiguity(onAmbiguous, source, {
-  primaryCandidateCount = 0,
-  fallbackCandidateCount = null,
-  newOfferCount = 0,
-  nonNewOfferCount = 0,
-  unknownOfferCount = 0,
-  document,
-  primaryContainerCount,
-  primaryCandidates,
-  primaryConditions,
-  selectedPrimaryContainer
-} = {}) {
-  if (typeof onAmbiguous !== "function") return;
-  const bounded = value => Math.min(MAX_AMBIGUITY_DIAGNOSTIC_COUNT, value);
-  try {
-    const report = {
-      errorCode: "PRICE_AMBIGUOUS",
-      source,
-      primaryCandidateCount: bounded(primaryCandidateCount),
-      fallbackCandidateCount: fallbackCandidateCount === null ? null : bounded(fallbackCandidateCount),
-      newOfferCount: bounded(newOfferCount),
-      nonNewOfferCount: bounded(nonNewOfferCount),
-      unknownOfferCount: bounded(unknownOfferCount)
-    };
-    if (source === "PRIMARY_MULTIPLE_UNKNOWN") {
-      report.primaryContainerCount = bounded(primaryContainerCount ?? document?.querySelectorAll?.("#corePrice_feature_div")?.length ?? 0);
-      report.candidates = primaryCandidateDiagnostics(primaryCandidates, primaryConditions, selectedPrimaryContainer);
-    }
-    onAmbiguous(report);
-  } catch { /* Diagnostics must never affect price extraction. */ }
-}
 
 export function extractProductTitle(doc) {
   const candidate = doc.querySelector("#productTitle")?.textContent;
@@ -156,24 +116,19 @@ function onlyDivsBetween(descendant, ancestor) {
   return true;
 }
 
-function diagnosticTagName(node) {
-  const name = typeof node?.tagName === "string" ? node.tagName.toUpperCase() : "";
-  return STOP_TAG_NAMES.has(name) ? name : "OTHER";
-}
-
 function leadingHeadingText(heading) {
   const parts = [];
-  let stopTag = null;
   const appendSimpleText = node => {
+    const nestedParts = [];
     for (const child of node?.childNodes || []) {
       if (child.nodeType === 3) {
-        parts.push(child.nodeValue || "");
+        nestedParts.push(child.nodeValue || "");
         continue;
       }
       if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
-      return { complete: false, stopTag: diagnosticTagName(child) };
+      return null;
     }
-    return { complete: true, stopTag: null };
+    return nestedParts.join(" ");
   };
 
   for (const child of heading?.childNodes || []) {
@@ -182,78 +137,33 @@ function leadingHeadingText(heading) {
       continue;
     }
     if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
-    if (child.nodeType === 1 && child.tagName?.toUpperCase() === "SPAN") {
+    if (child.nodeType === 1 && ["SPAN", "DIV"].includes(child.tagName?.toUpperCase())) {
       const nested = appendSimpleText(child);
-      if (nested.complete) continue;
-      stopTag = nested.stopTag || "SPAN";
-      break;
+      if (nested === null) return "";
+      parts.push(nested);
+      continue;
     }
-    // Read only direct heading text and a simple, direct text wrapper.
-    stopTag = diagnosticTagName(child);
-    break;
+    return "";
   }
-  return { text: parts.join(" ").replace(/\s+/g, " ").trim(), stopTag };
+  const text = parts.join(" ").replace(/\s+/g, " ").trim();
+  return text.length <= 120 ? text : "";
 }
 
 function primaryOfferCondition(candidate, primaryContainer) {
   const row = candidate?.closest?.(".a-accordion-row");
-  if (!row) return { inOfferRow: false, condition: "unknown", row: null, headingCount: 0, unknownReason: "ROW_MISSING", headingStopTag: null };
+  if (!row) return { inOfferRow: false, condition: "unknown" };
   const rowIsRelatedToPrimary = primaryContainer?.contains?.(row) || row.contains?.(primaryContainer);
   const headings = [...row.querySelectorAll("h5")];
-  const details = { inOfferRow: true, row, headingCount: headings.length, headingStopTag: null };
-  if (!rowIsRelatedToPrimary) return { ...details, condition: "unknown", unknownReason: "ROW_RELATION_INVALID" };
-  if (headings.length !== 1) return { ...details, condition: "unknown", unknownReason: "HEADING_COUNT_UNEXPECTED" };
-  const headingText = leadingHeadingText(headings[0]);
-  if (NEW_OFFER_LABEL.test(headingText.text)) return { ...details, headingStopTag: headingText.stopTag, condition: "new", unknownReason: null };
-  if (NON_NEW_OFFER_LABEL.test(headingText.text)) return { ...details, headingStopTag: headingText.stopTag, condition: "non-new", unknownReason: null };
-  return {
-    ...details,
-    headingStopTag: headingText.stopTag,
-    condition: "unknown",
-    unknownReason: headingText.text ? "HEADING_LABEL_UNRECOGNIZED" : "HEADING_TEXT_UNREADABLE"
-  };
+  if (!rowIsRelatedToPrimary || headings.length !== 1) return { inOfferRow: true, condition: "unknown" };
+  const label = leadingHeadingText(headings[0]);
+  if (NEW_OFFER_LABEL.test(label)) return { inOfferRow: true, condition: "new" };
+  if (NON_NEW_OFFER_LABEL.test(label)) return { inOfferRow: true, condition: "non-new" };
+  return { inOfferRow: true, condition: "unknown" };
 }
 
-function hasDiagnosticAncestor(candidate, predicate) {
-  let node = candidate;
-  for (let depth = 0; node && depth < MAX_DIAGNOSTIC_ANCESTRY_DEPTH; depth++, node = node.parentElement) {
-    if (predicate(node)) return true;
-  }
-  return false;
-}
-
-function primaryCandidateDiagnostics(candidates, conditions, selectedPrimaryContainer) {
-  const parsedCents = candidates.map(candidate => {
-    const price = parseTurkishPrice(typeof candidate?.textContent === "string" ? candidate.textContent : "");
-    return price === null ? null : Math.round(price * 100);
-  });
-  const rows = conditions.map(({ row }) => row);
-  return candidates.slice(0, MAX_PRIMARY_CANDIDATE_DIAGNOSTICS).map((candidate, index) => {
-    const condition = conditions[index];
-    return {
-      priceFormatValid: parsedCents[index] !== null,
-      sameParsedAmount: parsedCents[index] !== null && parsedCents.some((amount, otherIndex) => otherIndex !== index && amount === parsedCents[index]),
-      isStrikePrice: hasDiagnosticAncestor(candidate, node =>
-        node.classList?.contains?.("a-text-price") || node.getAttribute?.("data-a-strike") === "true"),
-      isPriceToPay: hasDiagnosticAncestor(candidate, node =>
-        node.classList?.contains?.("priceToPay") || node.classList?.contains?.("apex-pricetoprice") || PAYABLE_CONTEXT_IDS.has(node.id)),
-      hasAccordionRow: Boolean(condition.row),
-      sameAccordionRow: Boolean(condition.row && rows.some((row, otherIndex) => otherIndex !== index && row === condition.row)),
-      headingCount: Math.min(MAX_DIAGNOSTIC_HEADING_COUNT, condition.headingCount),
-      unknownReason: condition.unknownReason || "NOT_UNKNOWN",
-      headingStopTag: condition.headingStopTag,
-      candidateInsideSelectedPrimaryContainer: Boolean(selectedPrimaryContainer?.contains?.(candidate))
-    };
-  });
-}
-
-function extractPayablePriceFallback(doc, onAmbiguous, primaryCandidateCount) {
+function extractPayablePriceFallback(doc) {
   const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
   if (candidates.length > 1) {
-    reportPriceAmbiguity(onAmbiguous, "FALLBACK_MULTIPLE", {
-      primaryCandidateCount,
-      fallbackCandidateCount: candidates.length
-    });
     return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
   }
   const candidate = candidates[0];
@@ -279,7 +189,7 @@ export function parseTurkishPrice(value) {
   return Number.isSafeInteger(Math.round(price * 100)) && price > 0 ? price : null;
 }
 
-export function extractPrimaryPrice(doc, onAmbiguous) {
+export function extractPrimaryPrice(doc) {
   const title = doc.title || "";
   const bodyText = doc.body?.textContent || "";
   // A verification form is structural evidence; incidental scripts and product text are not.
@@ -305,50 +215,39 @@ export function extractPrimaryPrice(doc, onAmbiguous) {
   if (/amazon sign.in|giriş yap/i.test(title) && doc.querySelector("#ap_email")) {
     return { status: "failure", errorCode: "AUTH_REQUIRED" };
   }
-  const primaryContainer = doc.querySelector("#corePrice_feature_div");
-  if (!primaryContainer) {
+  const primaryContainers = [...doc.querySelectorAll("#corePrice_feature_div")];
+  if (primaryContainers.length === 0) {
     return { status: "failure", errorCode: "HTML_STRUCTURE" };
   }
-  const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)].filter(candidate => !isUnitPriceCandidate(candidate));
+  const candidates = [...new Set(doc.querySelectorAll(PRIMARY_SELECTOR))]
+    .filter(candidate => !isUnitPriceCandidate(candidate));
+  const candidateContainers = candidates.map(candidate =>
+    [...primaryContainers].reverse().find(container => container.contains(candidate)) || null);
   if (candidates.length === 1 && !candidates[0].textContent?.trim()) {
-    return extractPayablePriceFallback(doc, onAmbiguous, candidates.length);
+    return extractPayablePriceFallback(doc);
   }
   let selectedCandidate;
   if (candidates.length > 1) {
-    const conditions = candidates.map(candidate => primaryOfferCondition(candidate, primaryContainer));
+    const conditions = candidates.map((candidate, index) => primaryOfferCondition(candidate, candidateContainers[index]));
     const newOfferCount = conditions.filter(({ condition }) => condition === "new").length;
     const nonNewOfferCount = conditions.filter(({ condition }) => condition === "non-new").length;
     const unknownOfferCount = conditions.filter(({ condition }) => condition === "unknown").length;
-    const counts = {
-      primaryCandidateCount: candidates.length,
-      newOfferCount,
-      nonNewOfferCount,
-      unknownOfferCount
-    };
     if (unknownOfferCount > 0) {
-      reportPriceAmbiguity(onAmbiguous, "PRIMARY_MULTIPLE_UNKNOWN", {
-        ...counts,
-        document: doc,
-        primaryCandidates: candidates,
-        primaryConditions: conditions,
-        selectedPrimaryContainer: primaryContainer
-      });
       return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
     }
     const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
     if (newIndexes.length > 1) {
-      reportPriceAmbiguity(onAmbiguous, "PRIMARY_MULTIPLE_NEW", counts);
       return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
     }
     if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
     selectedCandidate = candidates[newIndexes[0]];
   } else if (candidates.length === 1) {
-    const offer = primaryOfferCondition(candidates[0], primaryContainer);
+    const offer = primaryOfferCondition(candidates[0], candidateContainers[0]);
     if (offer.condition === "non-new") return { status: "failure", errorCode: "PRICE_MISSING" };
     selectedCandidate = candidates[0];
   }
   if (candidates.length === 0) {
-    return extractPayablePriceFallback(doc, onAmbiguous, candidates.length);
+    return extractPayablePriceFallback(doc);
   }
   const priceTry = parseTurkishPrice(selectedCandidate.textContent);
   return priceTry === null

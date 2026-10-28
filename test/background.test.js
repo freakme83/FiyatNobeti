@@ -40,7 +40,7 @@ globalThis.chrome = {
     onInstalled: { addListener(fn) { installedListener = fn; } },
     onStartup: { addListener(fn) { startupListener = fn; } },
     async sendMessage(message) {
-      assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG", "PARSE_HTML_BRANCH_DIAG"].includes(message.type));
+      assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG"].includes(message.type));
       assert.match(message.html, /corePrice_feature_div/);
       if (parseHandler) return parseHandler(message.html, message.type);
       return { status: "success", priceTry: 36000 };
@@ -94,7 +94,6 @@ globalThis.fetch = async (url, options) => {
 };
 const {
   diagnoseProductForDev,
-  getLastPriceParserAmbiguityForDev,
   prepareAutomaticAlarmTestForDev,
   runAutomaticAlarmTestForDev,
   runOneAutomaticCheckForDev,
@@ -1691,49 +1690,6 @@ test("developer diagnosis uses one safe fetch and does not mutate product check 
     assert.equal(fetched.options.redirect, "manual");
     assert.deepEqual(stored.watchlist, before);
     assert.doesNotMatch(JSON.stringify(result), /corePrice_feature_div|cookie|<div|ref_=private/);
-  } finally { setDeveloperEventRecorderForDev(undefined); }
-});
-
-test("manual developer check exposes only the latest bounded parser ambiguity report in memory", async () => {
-  await resetWatchlist();
-  setDeveloperEventRecorderForDev(() => Promise.resolve());
-  const product = seedProduct("B0D47HCRZ6", { attemptedAt: "2026-10-21T11:00:00.000Z", status: "success" });
-  product.lastSuccessfulPriceTry = 599.99;
-  const previousPrice = product.lastSuccessfulPriceTry;
-  let requests = 0;
-  const otherAsin = "B0D47HCRZ7";
-  fetchHandler = async url => { requests++; return htmlResponse(url.split("/").at(-1)); };
-  parseHandler = (html, type) => {
-    assert.equal(type, "PARSE_HTML_BRANCH_DIAG");
-    if (html.includes(otherAsin)) return { status: "success", priceTry: 12 };
-    return { status: "failure", errorCode: "PRICE_AMBIGUOUS", branchDiagnostic: {
-      errorCode: "PRICE_AMBIGUOUS", source: "PRIMARY_MULTIPLE_UNKNOWN", primaryCandidateCount: 2,
-      fallbackCandidateCount: null, newOfferCount: 0, nonNewOfferCount: 0, unknownOfferCount: 2,
-      primaryContainerCount: 1,
-      candidates: [{ priceFormatValid: true, sameParsedAmount: true, isStrikePrice: false, isPriceToPay: true,
-        hasAccordionRow: true, sameAccordionRow: true, headingCount: 1, unknownReason: "HEADING_LABEL_UNRECOGNIZED",
-        headingStopTag: null, candidateInsideSelectedPrimaryContainer: true, rawHeading: "must be stripped", price: 51399 }]
-    } };
-  };
-  try {
-    const result = await message("CHECK_PRODUCT", { asin: "B0D47HCRZ6" });
-    assert.equal(result.errorCode, "PRICE_AMBIGUOUS");
-    assert.equal(requests, 1);
-    assert.deepEqual(getLastPriceParserAmbiguityForDev(), {
-      errorCode: "PRICE_AMBIGUOUS", source: "PRIMARY_MULTIPLE_UNKNOWN", primaryCandidateCount: 2,
-      fallbackCandidateCount: null, newOfferCount: 0, nonNewOfferCount: 0, unknownOfferCount: 2,
-      primaryContainerCount: 1,
-      candidates: [{ priceFormatValid: true, sameParsedAmount: true, isStrikePrice: false, isPriceToPay: true,
-        hasAccordionRow: true, sameAccordionRow: true, headingCount: 1, unknownReason: "HEADING_LABEL_UNRECOGNIZED",
-        headingStopTag: null, candidateInsideSelectedPrimaryContainer: true }]
-    });
-    assert.doesNotMatch(JSON.stringify(getLastPriceParserAmbiguityForDev()), /must be stripped|51399/);
-    assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, previousPrice);
-    assert.equal(Object.hasOwn(stored, "lastDeveloperPriceParserAmbiguity"), false);
-    seedProduct(otherAsin);
-    assert.equal((await message("CHECK_PRODUCT", { asin: otherAsin })).status, "success");
-    assert.equal(requests, 2);
-    assert.equal(getLastPriceParserAmbiguityForDev().source, "PRIMARY_MULTIPLE_UNKNOWN");
   } finally { setDeveloperEventRecorderForDev(undefined); }
 });
 
