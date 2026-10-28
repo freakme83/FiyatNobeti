@@ -9,19 +9,40 @@ function fixture(html) {
   function makeNode(tagName, attributes, parentElement) {
     const classNames = (attributes.class || "").split(/\s+/).filter(Boolean);
     const children = [];
+    const childNodes = [];
     let ownText = "";
     return {
+      nodeType: tagName === "#document" ? 9 : 1,
       tagName: tagName.toUpperCase(),
       id: attributes.id || "",
       getAttribute(name) { return attributes[name] ?? null; },
       parentElement,
       children,
+      childNodes,
       classList: {
         length: classNames.length,
         item(index) { return classNames[index] ?? null; },
         contains(value) { return classNames.includes(value); }
       },
-      appendText(value) { ownText += value; },
+      appendText(value) {
+        ownText += value;
+        childNodes.push({ nodeType: 3, nodeValue: value, textContent: value });
+      },
+      closest(selector) {
+        if (selector !== ".a-accordion-row") return null;
+        for (let node = this; node; node = node.parentElement) {
+          if (node.classList?.contains("a-accordion-row")) return node;
+        }
+        return null;
+      },
+      contains(target) {
+        for (let node = target; node; node = node.parentElement) if (node === this) return true;
+        return false;
+      },
+      querySelectorAll(selector) {
+        if (selector !== "h5") throw new Error("Unexpected element selector: " + selector);
+        return findAll(this, node => node.tagName === "H5");
+      },
       get textContent() { return ownText + children.map(child => child.textContent).join(""); }
     };
   }
@@ -50,6 +71,7 @@ function fixture(html) {
     }
     const node = makeNode(tagName, attributes, stack.at(-1));
     stack.at(-1).children.push(node);
+    stack.at(-1).childNodes.push(node);
     if (!voidTags.has(tagName) && !/\/\s*>$/.test(token)) stack.push(node);
   }
 
@@ -76,8 +98,8 @@ function fixture(html) {
       if (selector === "form[action]") return findAll(root, node => node.tagName === "FORM" && node.getAttribute("action") !== null);
       if (selector === "p, label, h1, h2, h3") return findAll(root, node => ["P", "LABEL", "H1", "H2", "H3"].includes(node.tagName));
       if (selector === "#corePrice_feature_div .a-offscreen") {
-        const core = findById("corePrice_feature_div");
-        return core ? findAll(core, node => node.classList.contains("a-offscreen")) : [];
+        return [...new Set(findAll(root, node => node.id === "corePrice_feature_div")
+          .flatMap(core => findAll(core, node => node.classList.contains("a-offscreen"))))];
       }
       if (selector === "#apex-pricetopay-accessibility-label") {
         return findAll(root, node => node.id === "apex-pricetopay-accessibility-label");
@@ -275,6 +297,66 @@ test("rejects multiple primary candidates and unrecognized primary prices", () =
     </div>`)), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
   assert.deepEqual(extractPrimaryPrice(fixture('<div id="corePrice_feature_div"><span class="a-offscreen">See options</span></div>')),
     { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
+});
+
+function enclosingOfferMarkup(labelMarkup, price) {
+  return `<div class="a-accordion-row"><h5>${labelMarkup}</h5><div id="corePrice_feature_div"><span class="a-offscreen">${price}</span></div></div>`;
+}
+
+test("recognizes a new offer when its accordion row encloses the primary container", () => {
+  const doc = fixture(enclosingOfferMarkup(
+    '<span>Yenisini Satın Al</span><style>.offer { color: red }</style><div>Kullanılmış</div>',
+    "51.399,00TL"
+  ));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
+});
+
+test("rejects a recognized used offer in an enclosing accordion row", () => {
+  const doc = fixture(enclosingOfferMarkup('<span>Kullanılmış ve yeni gibi</span>', "46.647,90TL"));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_MISSING" });
+});
+
+test("accepts a single valid primary price when its accordion offer condition is unknown", () => {
+  const doc = fixture(enclosingOfferMarkup(
+    '<span>Satın alma seçenekleri</span><div>Yenisini Satın Al</div>',
+    "51.399,00TL"
+  ));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
+});
+
+test("multiple candidates with unknown offer conditions remain ambiguous", () => {
+  const doc = fixture(`<div class="a-accordion-row"><h5><span>Satın alma seçenekleri</span></h5><div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span><span class="a-offscreen">46.647,90TL</span></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+});
+
+test("an ordinary single-price page remains successful", () => {
+  assert.deepEqual(extractPrimaryPrice(fixture('<div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div>')),
+    { status: "success", priceTry: 51399 });
+});
+
+test("duplicate and overlapping primary containers select the uniquely labeled new offer once", () => {
+  const doc = fixture(`
+    <div class="a-accordion-row"><h5><div>Kullanılmış ve yeni gibi</div></h5>
+      <div id="corePrice_feature_div"><span class="a-offscreen">46.647,90TL</span></div></div>
+    <div class="a-accordion-row"><h5><div>Yenisini Satın Al<style>.hidden { display:none }</style></div></h5>
+      <div id="corePrice_feature_div"><div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
+});
+
+test("a simple direct DIV heading wrapper identifies the offer without reading unrelated row text", () => {
+  const doc = fixture(`<div class="a-accordion-row"><h5><div>Yenisini Satın Al</div></h5>
+    <div>Used offer details are unrelated to the heading</div>
+    <div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
+});
+
+test("unknown or nested conflicting offer labels across primary containers remain ambiguous", () => {
+  const doc = fixture(`
+    <div class="a-accordion-row"><h5><div><span>Yenisini Satın Al</span></div></h5>
+      <div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div></div>
+    <div class="a-accordion-row"><h5><div>Diğer seçenek</div></h5>
+      <div id="corePrice_feature_div"><span class="a-offscreen">46.647,90TL</span></div></div>`);
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
 });
 
 test("classifies bot checks, access denied, and sign-in pages before price extraction", () => {

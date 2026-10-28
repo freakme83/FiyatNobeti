@@ -3,6 +3,8 @@ const PAYABLE_PRICE_SELECTOR = "#apex-pricetopay-accessibility-label";
 const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
 const MAX_PRICE_ANCESTORS = 6;
 const EXCLUDED_PRICE_CONTEXT = /(?:coupon|shipping|installment|monthly|used|other.?seller|recommend|similar|variation|format|unit|discount|list.?price)/i;
+const NEW_OFFER_LABEL = /^Yenisini Satın Al(?:$|[\s:·–—])/iu;
+const NON_NEW_OFFER_LABEL = /^(?:Kullanılmış|Yenilenmiş|İkinci el|Used|Refurbished|Renewed|Second hand)(?:$|[\s:·–—])/iu;
 
 export function extractProductTitle(doc) {
   const candidate = doc.querySelector("#productTitle")?.textContent;
@@ -114,9 +116,56 @@ function onlyDivsBetween(descendant, ancestor) {
   return true;
 }
 
+function leadingHeadingText(heading) {
+  const parts = [];
+  const appendSimpleText = node => {
+    const nestedParts = [];
+    for (const child of node?.childNodes || []) {
+      if (child.nodeType === 3) {
+        nestedParts.push(child.nodeValue || "");
+        continue;
+      }
+      if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
+      return null;
+    }
+    return nestedParts.join(" ");
+  };
+
+  for (const child of heading?.childNodes || []) {
+    if (child.nodeType === 3) {
+      parts.push(child.nodeValue || "");
+      continue;
+    }
+    if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
+    if (child.nodeType === 1 && ["SPAN", "DIV"].includes(child.tagName?.toUpperCase())) {
+      const nested = appendSimpleText(child);
+      if (nested === null) return "";
+      parts.push(nested);
+      continue;
+    }
+    return "";
+  }
+  const text = parts.join(" ").replace(/\s+/g, " ").trim();
+  return text.length <= 120 ? text : "";
+}
+
+function primaryOfferCondition(candidate, primaryContainer) {
+  const row = candidate?.closest?.(".a-accordion-row");
+  if (!row) return { inOfferRow: false, condition: "unknown" };
+  const rowIsRelatedToPrimary = primaryContainer?.contains?.(row) || row.contains?.(primaryContainer);
+  const headings = [...row.querySelectorAll("h5")];
+  if (!rowIsRelatedToPrimary || headings.length !== 1) return { inOfferRow: true, condition: "unknown" };
+  const label = leadingHeadingText(headings[0]);
+  if (NEW_OFFER_LABEL.test(label)) return { inOfferRow: true, condition: "new" };
+  if (NON_NEW_OFFER_LABEL.test(label)) return { inOfferRow: true, condition: "non-new" };
+  return { inOfferRow: true, condition: "unknown" };
+}
+
 function extractPayablePriceFallback(doc) {
   const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
-  if (candidates.length > 1) return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+  if (candidates.length > 1) {
+    return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+  }
   const candidate = candidates[0];
   if (!candidate) {
     return { status: "failure", errorCode: "PRICE_MISSING" };
@@ -166,18 +215,41 @@ export function extractPrimaryPrice(doc) {
   if (/amazon sign.in|giriş yap/i.test(title) && doc.querySelector("#ap_email")) {
     return { status: "failure", errorCode: "AUTH_REQUIRED" };
   }
-  const primaryContainer = doc.querySelector("#corePrice_feature_div");
-  if (!primaryContainer) {
+  const primaryContainers = [...doc.querySelectorAll("#corePrice_feature_div")];
+  if (primaryContainers.length === 0) {
     return { status: "failure", errorCode: "HTML_STRUCTURE" };
   }
-  const candidates = [...doc.querySelectorAll(PRIMARY_SELECTOR)].filter(candidate => !isUnitPriceCandidate(candidate));
-  if (candidates.length > 1) {
-    return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
-  }
-  if (candidates.length === 0 || !candidates[0].textContent?.trim()) {
+  const candidates = [...new Set(doc.querySelectorAll(PRIMARY_SELECTOR))]
+    .filter(candidate => !isUnitPriceCandidate(candidate));
+  const candidateContainers = candidates.map(candidate =>
+    [...primaryContainers].reverse().find(container => container.contains(candidate)) || null);
+  if (candidates.length === 1 && !candidates[0].textContent?.trim()) {
     return extractPayablePriceFallback(doc);
   }
-  const priceTry = parseTurkishPrice(candidates[0].textContent);
+  let selectedCandidate;
+  if (candidates.length > 1) {
+    const conditions = candidates.map((candidate, index) => primaryOfferCondition(candidate, candidateContainers[index]));
+    const newOfferCount = conditions.filter(({ condition }) => condition === "new").length;
+    const nonNewOfferCount = conditions.filter(({ condition }) => condition === "non-new").length;
+    const unknownOfferCount = conditions.filter(({ condition }) => condition === "unknown").length;
+    if (unknownOfferCount > 0) {
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    }
+    const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
+    if (newIndexes.length > 1) {
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+    }
+    if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
+    selectedCandidate = candidates[newIndexes[0]];
+  } else if (candidates.length === 1) {
+    const offer = primaryOfferCondition(candidates[0], candidateContainers[0]);
+    if (offer.condition === "non-new") return { status: "failure", errorCode: "PRICE_MISSING" };
+    selectedCandidate = candidates[0];
+  }
+  if (candidates.length === 0) {
+    return extractPayablePriceFallback(doc);
+  }
+  const priceTry = parseTurkishPrice(selectedCandidate.textContent);
   return priceTry === null
     ? { status: "failure", errorCode: "PRICE_UNRECOGNIZED" }
     : { status: "success", priceTry };

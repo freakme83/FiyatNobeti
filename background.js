@@ -136,7 +136,8 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
     }
     const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
-    const parsed = await chrome.runtime.sendMessage({ type: developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML", html });
+    const parseType = developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML";
+    const parsed = await chrome.runtime.sendMessage({ type: parseType, html });
     if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
