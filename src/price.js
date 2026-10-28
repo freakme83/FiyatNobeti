@@ -1,3 +1,5 @@
+import { normalizeCandidatePrices } from "./watchlist.js";
+
 const PRIMARY_SELECTOR = "#corePrice_feature_div .a-offscreen";
 const PAYABLE_PRICE_SELECTOR = "#apex-pricetopay-accessibility-label";
 const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
@@ -161,6 +163,55 @@ function primaryOfferCondition(candidate, primaryContainer) {
   return { inOfferRow: true, condition: "unknown" };
 }
 
+// This opt-in presentation path requires positive product and payable-price
+// evidence for each row. Missing or complicated markup remains ambiguous.
+function unverifiedCandidates(doc, expectedAsin, candidates, containers, conditions) {
+  if (!/^[A-Z0-9]{10}$/.test(expectedAsin || "") || candidates.length !== 2 ||
+      conditions.some(item => item.condition === "non-new")) return null;
+  const identities = [...doc.querySelectorAll("#ASIN")];
+  if (identities.length !== 1 || identities[0].tagName !== "INPUT" ||
+      identities[0].getAttribute("type")?.toLowerCase() !== "hidden" ||
+      identities[0].getAttribute("value") !== expectedAsin) return null;
+  const rows = candidates.map(candidate => candidate.closest?.(".a-accordion-row"));
+  if (!rows[0] || !rows[1] || rows[0] === rows[1] || rows[0].contains(rows[1]) || rows[1].contains(rows[0]) ||
+      !containers[0] || !containers[1] || containers[0] === containers[1] ||
+      containers[0].contains(containers[1]) || containers[1].contains(containers[0])) return null;
+  for (let index = 0; index < 2; index++) {
+    const candidate = candidates[index];
+    const container = containers[index];
+    const row = rows[index];
+    if (!row.contains(container) || !container.contains(candidate) ||
+        row.getAttribute("data-asin") !== expectedAsin || candidate.tagName !== "SPAN" ||
+        !candidate.parentElement?.classList?.contains("a-price") ||
+        !["apex-pricetopay-value", "priceToPay"].some(token => candidate.parentElement.classList.contains(token))) return null;
+    if ([...row.querySelectorAll("[data-asin]")].some(node => node.getAttribute("data-asin") !== expectedAsin)) return null;
+    let node = candidate;
+    let depth = 0;
+    for (; node && node !== row && depth < 32; node = node.parentElement, depth++) {}
+    if (node !== row) return null;
+    // Reject explicitly non-new language anywhere in this offer row; never use
+    // that text to infer that either candidate is a new-product offer.
+    const stack = [row];
+    let text = "";
+    let visited = 0;
+    while (stack.length) {
+      const current = stack.pop();
+      if (++visited > 500 || text.length > 5000) return null;
+      if (current.nodeType === 3) text += ` ${current.nodeValue || ""}`;
+      else if (!["STYLE", "SCRIPT"].includes(current.tagName)) {
+        if (["S", "DEL", "STRIKE"].includes(current.tagName) ||
+            current.getAttribute?.("data-a-strike")?.toLowerCase() === "true" ||
+            /(?:reference|strike|was.?price|a-text-price|variant|twister|swatch)/i.test(`${current.id || ""} ${classNames(current)}`) ||
+            EXCLUDED_PRICE_CONTEXT.test(`${current.id || ""} ${classNames(current)}`)) return null;
+        stack.push(...[...(current.childNodes || [])].reverse());
+      }
+    }
+    const compactText = text.replace(/\s+/g, "").toLocaleLowerCase("tr-TR");
+    if (/(?:kullanılmış|yenilenmiş|ikinciel|teşhir|açıkkutu|used|refurbished|renewed|reconditioned|secondhand|preowned|openbox)/u.test(compactText)) return null;
+  }
+  return normalizeCandidatePrices(candidates.map(candidate => parseTurkishPrice(candidate.textContent)));
+}
+
 function extractPayablePriceFallback(doc) {
   const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
   if (candidates.length > 1) {
@@ -189,7 +240,7 @@ export function parseTurkishPrice(value) {
   return Number.isSafeInteger(Math.round(price * 100)) && price > 0 ? price : null;
 }
 
-export function extractPrimaryPrice(doc) {
+export function extractPrimaryPrice(doc, expectedAsin = null) {
   const title = doc.title || "";
   const bodyText = doc.body?.textContent || "";
   // A verification form is structural evidence; incidental scripts and product text are not.
@@ -233,11 +284,13 @@ export function extractPrimaryPrice(doc) {
     const nonNewOfferCount = conditions.filter(({ condition }) => condition === "non-new").length;
     const unknownOfferCount = conditions.filter(({ condition }) => condition === "unknown").length;
     if (unknownOfferCount > 0) {
-      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers, conditions);
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS", ...(candidatePricesTry ? { candidatePricesTry } : {}) };
     }
     const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
     if (newIndexes.length > 1) {
-      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers, conditions);
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS", ...(candidatePricesTry ? { candidatePricesTry } : {}) };
     }
     if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
     selectedCandidate = candidates[newIndexes[0]];

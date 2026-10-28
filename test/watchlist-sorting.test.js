@@ -53,6 +53,14 @@ test("five modes sort numeric prices, invalid dates, ties and missing prices wit
   assert.deepEqual(before, products());
 });
 
+test("price sorting ignores unverified candidate amounts", () => {
+  const items = products();
+  items[ids[3]].unverifiedPriceCandidates = { status: "unverified", checkedAt: "2026-10-23T00:00:00Z", pricesTry: [1, 2] };
+  items[ids[0]].unverifiedPriceCandidates = { status: "unverified", checkedAt: "2026-10-23T00:00:00Z", pricesTry: [10000, 9000] };
+  assert.deepEqual(visible(sortWatchlistProducts(items, "price-lowest")), [ids[1], ids[2], ids[0], ids[3]]);
+  assert.deepEqual(visible(sortWatchlistProducts(items, "price-highest")), [ids[0], ids[1], ids[2], ids[3]]);
+});
+
 test("stored modes and custom ASINs are sanitized, deduplicated and reconciled", () => {
   const items = products();
   assert.equal(normalizeSortMode("something else"), DEFAULT_SORT_MODE);

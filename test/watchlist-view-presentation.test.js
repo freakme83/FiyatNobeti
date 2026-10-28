@@ -54,6 +54,33 @@ test("changed price shows percentage on closed row; failure warning is short whi
   assert.match(text(row.children.at(-1).children.at(-1)), /ağ isteği başarısız/);
 });
 
+test("unverified candidates use the compact price area and explain their limits in details", () => {
+  const unverified = product({
+    lastCheckStatus: "failure", lastErrorCode: "PRICE_AMBIGUOUS",
+    unverifiedPriceCandidates: { status: "unverified", checkedAt: stamp, pricesTry: [3739.41, 4192.49] }
+  });
+  const row = createProductRow(doc, unverified);
+  const closed = topLevelText(row);
+  assert.match(closed, /Fiyat adayı · Doğrulanmadı/);
+  assert.match(closed, /₺4\.192,49/);
+  assert.match(closed, /Diğer: ₺3\.739,41/);
+  assert.doesNotMatch(closed, /Son başarılı fiyat|%20|Son kontrol başarısız/);
+  const details = row.children.at(-1).children.at(-1);
+  const detailText = text(details);
+  assert.match(detailText, /teklif türleri doğrulanamadı/);
+  assert.match(detailText, /fiyat değişim bildirimlerine dahil değildir/);
+  assert.match(detailText, /Son başarılı fiyat: ₺1\.000,00/);
+  const link = details.children[0].children.find(child => child.tagName === "a");
+  assert.equal(link.href, `https://www.amazon.com.tr/dp/${asin}`);
+  assert.equal(link.target, "_blank");
+  assert.equal(link.rel, "noopener noreferrer");
+  assert.equal(row.children.at(-1).children[0].children[0].children[0].dataset.action, "check");
+  assert.equal(row.children.at(-1).children[0].children[1].dataset.action, "remove");
+  const stale = createProductRow(doc, { ...unverified, lastAttemptedCheckAt: "2026-10-24T10:00:00.000Z" });
+  assert.doesNotMatch(topLevelText(stale), /Fiyat adayı/);
+  assert.match(topLevelText(createProductRow(doc, product())), /Son başarılı fiyat/);
+});
+
 test("compact actions are independent of the popover; order buttons appear only in custom mode", () => {
   const normal = createProductRow(doc, product());
   const normalActions = normal.children.at(-1);

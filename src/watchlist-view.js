@@ -1,5 +1,5 @@
 import { compareWithBaseline } from "./price-comparison.js";
-import { priceCents } from "./watchlist.js";
+import { normalizeUnverifiedCandidates, priceCents } from "./watchlist.js";
 import { parseAmazonInput } from "./url.js";
 import { sortWatchlistProducts } from "./watchlist-sorting.js";
 import { formatManualCooldown, manualCheckCooldownRemaining } from "./manual-check-cooldown.js";
@@ -64,10 +64,12 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
   const heading = doc.createElement("h3");
   heading.className = "product-title";
   const title = product.title || "Amazon ürünü";
+  let productUrl = null;
   try {
     // A stored URL is never used as a destination; only the product's ASIN is accepted.
     const destination = parseAmazonInput(product.asin);
     if (destination.type !== "product" || destination.asin !== product.asin) throw new Error("INVALID_PRODUCT");
+    productUrl = destination.canonicalUrl;
     const link = textElement(doc, "a", "", title);
     link.href = destination.canonicalUrl;
     link.target = "_blank";
@@ -90,7 +92,30 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
   detailContent.append(textElement(doc, "p", "product-asin", product.asin));
   detailContent.append(textElement(doc, "p", "product-full-title", title));
 
-  if (priceCents(product.lastSuccessfulPriceTry) !== null) {
+  const candidateRecord = normalizeUnverifiedCandidates(product.unverifiedPriceCandidates);
+  const unverified = product.lastCheckStatus === "failure" && product.lastErrorCode === "PRICE_AMBIGUOUS" &&
+    candidateRecord?.checkedAt === product.lastAttemptedCheckAt ? candidateRecord : null;
+  if (unverified) {
+    row.append(
+      textElement(doc, "p", "product-price-label", "Fiyat adayı · Doğrulanmadı"),
+      textElement(doc, "p", "product-price", priceFormatter.format(unverified.pricesTry[0])),
+      textElement(doc, "p", "product-comparison product-candidate-other", `Diğer: ${priceFormatter.format(unverified.pricesTry[1])}`)
+    );
+    detailContent.append(
+      textElement(doc, "p", "product-meta", "Birden fazla fiyat bulundu. Yüksek tutar varsayılan gösteriliyor; teklif türleri doğrulanamadı."),
+      textElement(doc, "p", "product-meta", "Bu fiyatlar doğrulanmış fiyat geçmişine ve fiyat değişim bildirimlerine dahil değildir.")
+    );
+    if (priceCents(product.lastSuccessfulPriceTry) !== null) {
+      detailContent.append(textElement(doc, "p", "product-meta", `Son başarılı fiyat: ${priceFormatter.format(product.lastSuccessfulPriceTry)}${product.lastSuccessfulCheckAt ? ` · ${timeLabel(product.lastSuccessfulCheckAt)}` : ""}`));
+    }
+    if (productUrl) {
+      const link = textElement(doc, "a", "", "Amazon'da aç");
+      link.href = productUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      detailContent.append(link);
+    }
+  } else if (priceCents(product.lastSuccessfulPriceTry) !== null) {
     row.append(
       textElement(doc, "p", "product-price-label", "Son başarılı fiyat"),
       textElement(doc, "p", "product-price", priceFormatter.format(product.lastSuccessfulPriceTry))
@@ -113,7 +138,7 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
     detailContent.append(textElement(doc, "p", "product-meta", "İlk geçerli fiyat bekleniyor."));
   }
 
-  if (product.lastCheckStatus === "failure") row.append(textElement(doc, "p", "product-status error", "Son kontrol başarısız"));
+  if (product.lastCheckStatus === "failure" && !unverified) row.append(textElement(doc, "p", "product-status error", "Son kontrol başarısız"));
   else if (product.lastCheckStatus === "checking") row.append(textElement(doc, "p", "product-status", "Kontrol ediliyor…"));
   else if (product.lastCheckStatus === "never" && priceCents(product.lastSuccessfulPriceTry) === null) {
     row.append(textElement(doc, "p", "product-status", "İlk fiyat kontrolü bekleniyor"));
@@ -121,7 +146,7 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
   if (product.lastCheckStatus !== "success" && product.lastCheckStatus !== "failure" && product.lastCheckStatus !== "checking" && product.lastSuccessfulCheckAt) {
     row.append(textElement(doc, "p", "product-status error", "Fiyat güncel olmayabilir"));
   }
-  if (product.lastCheckStatus === "failure" && product.lastErrorCode) {
+  if (product.lastCheckStatus === "failure" && product.lastErrorCode && !unverified) {
     detailContent.append(textElement(doc, "p", "product-status error", `Son kontrol başarısız · ${errorMessage(product.lastErrorCode)}`));
   } else if (product.lastCheckStatus === "never") detailContent.append(textElement(doc, "p", "product-status", "Henüz kontrol edilmedi."));
   if (product.lastAttemptedCheckAt) {

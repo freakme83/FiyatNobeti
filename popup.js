@@ -205,6 +205,7 @@ form.addEventListener("submit", async event => {
       if (product?.canonicalUrl) input.value = product.canonicalUrl;
       status.textContent = result.check?.status === "success"
         ? "Ürün eklendi ve fiyat kontrol edildi."
+        : result.check?.candidatePricesTry ? "Ürün eklendi; fiyat adayları doğrulanamadı."
         : `Ürün eklendi; ilk fiyat alınamadı${result.check?.errorCode ? ` · ${errorMessage(result.check.errorCode)}` : "."}`;
     } else {
       showFailure(result);
@@ -263,6 +264,7 @@ productList.addEventListener("click", async event => {
     if (result?.status === "busy") status.textContent = "Bu ürün için kontrol zaten sürüyor.";
     else if (result?.status === "cooldown") status.textContent = "Bu ürün için manuel kontrol henüz kullanılamıyor.";
     else if (result?.status === "success") status.textContent = "Fiyat kontrolü tamamlandı.";
+    else if (result?.status === "failure" && result.candidatePricesTry) status.textContent = "Fiyat adayları bulundu; doğrulanamadı.";
     else if (result?.status === "failure") showFailure(result);
     await loadWatchlist();
   } catch {
