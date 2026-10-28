@@ -229,7 +229,6 @@ export function extractPrimaryPrice(doc) {
   } else if (candidates.length === 1) {
     const offer = primaryOfferCondition(candidates[0], primaryContainer);
     if (offer.condition === "non-new") return { status: "failure", errorCode: "PRICE_MISSING" };
-    if (offer.inOfferRow && offer.condition === "unknown") return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
     selectedCandidate = candidates[0];
   }
   if (candidates.length === 0) {

@@ -316,11 +316,16 @@ test("rejects a recognized used offer in an enclosing accordion row", () => {
   assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_MISSING" });
 });
 
-test("an unknown offer remains ambiguous even when unrelated nested text says new", () => {
+test("accepts a single valid primary price when its accordion offer condition is unknown", () => {
   const doc = fixture(enclosingOfferMarkup(
     '<span>Satın alma seçenekleri</span><div>Yenisini Satın Al</div>',
     "51.399,00TL"
   ));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
+});
+
+test("multiple candidates with unknown offer conditions remain ambiguous", () => {
+  const doc = fixture(`<div class="a-accordion-row"><h5><span>Satın alma seçenekleri</span></h5><div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span><span class="a-offscreen">46.647,90TL</span></div></div>`);
   assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
 });
 
