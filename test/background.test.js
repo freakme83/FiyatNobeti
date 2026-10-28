@@ -1158,12 +1158,13 @@ test("a new product with candidates remains addable and a later unqualified fail
   useProductionBackground();
   await withClock("2026-10-22T12:00:00.000Z", async clock => {
     await resetWatchlist();
-    parseHandler = async () => ({ status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, 3739.41] });
+    parseHandler = async () => ({ status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, 3739.41], title: "Apple Magic Mouse" });
     const added = await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
     assert.equal(added.status, "added");
     assert.equal(added.check.errorCode, "PRICE_AMBIGUOUS");
     let product = added.watchlist.products.B0D47HCRZ6;
     assert.deepEqual(product.unverifiedPriceCandidates.pricesTry, [4192.49, 3739.41]);
+    assert.equal(product.title, "Apple Magic Mouse");
     assert.equal(product.lastSuccessfulPriceTry, null);
     assert.equal(product.baselinePriceTry, null);
     clock.advance(180_000);
