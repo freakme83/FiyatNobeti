@@ -147,7 +147,8 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
     const candidatePricesTry = parsed?.errorCode === "PRICE_AMBIGUOUS"
       ? normalizeCandidatePrices(parsed.candidatePricesTry) : null;
     return { status: "failure", errorCode: parsed?.errorCode || "PARSE_ERROR",
-      ...(candidatePricesTry ? { candidatePricesTry } : {}) };
+      ...(candidatePricesTry ? { candidatePricesTry } : {}),
+      ...(candidatePricesTry && normalizeProductTitle(parsed?.title) ? { title: normalizeProductTitle(parsed.title) } : {}) };
   } catch (error) {
     return {
       status: "failure",
@@ -404,7 +405,10 @@ async function checkWatchlistProduct(asin, {
         product.lastCheckStatus = "failure";
         product.lastErrorCode = fetched.errorCode || "PARSE_ERROR";
         const pricesTry = fetched.errorCode === "PRICE_AMBIGUOUS" ? normalizeCandidatePrices(fetched.candidatePricesTry) : null;
-        if (pricesTry) product.unverifiedPriceCandidates = { status: "unverified", checkedAt, pricesTry };
+        if (pricesTry) {
+          product.unverifiedPriceCandidates = { status: "unverified", checkedAt, pricesTry };
+          if (fetched.title) product.title = fetched.title;
+        }
         else delete product.unverifiedPriceCandidates;
       }
       await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
