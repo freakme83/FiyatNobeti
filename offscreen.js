@@ -5,7 +5,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
     const doc = new DOMParser().parseFromString(message.html, "text/html");
     const result = extractPrimaryPrice(doc, message.expectedAsin);
-    sendResponse(result.status === "success" ? { ...result, title: extractProductTitle(doc) } : result);
+    sendResponse({ ...result, title: extractProductTitle(doc) });
   } catch {
     sendResponse({ status: "failure", errorCode: "PARSE_ERROR" });
   }
