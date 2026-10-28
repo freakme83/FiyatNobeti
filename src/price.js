@@ -118,13 +118,26 @@ function onlyDivsBetween(descendant, ancestor) {
 
 function leadingHeadingText(heading) {
   const parts = [];
+  const appendSimpleText = node => {
+    for (const child of node?.childNodes || []) {
+      if (child.nodeType === 3) {
+        parts.push(child.nodeValue || "");
+        continue;
+      }
+      if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
+      return false;
+    }
+    return true;
+  };
+
   for (const child of heading?.childNodes || []) {
     if (child.nodeType === 3) {
       parts.push(child.nodeValue || "");
       continue;
     }
     if (child.nodeType === 1 && ["STYLE", "SCRIPT"].includes(child.tagName?.toUpperCase())) continue;
-    // Do not mine unrelated or nested descendants for a condition label.
+    if (child.nodeType === 1 && child.tagName?.toUpperCase() === "SPAN" && appendSimpleText(child)) continue;
+    // Read only direct heading text and a simple, direct text wrapper.
     break;
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -132,7 +145,9 @@ function leadingHeadingText(heading) {
 
 function primaryOfferCondition(candidate, primaryContainer) {
   const row = candidate?.closest?.(".a-accordion-row");
-  if (!row || !primaryContainer?.contains?.(row)) return { inOfferRow: false, condition: "unknown" };
+  if (!row) return { inOfferRow: false, condition: "unknown" };
+  const rowIsRelatedToPrimary = primaryContainer?.contains?.(row) || row.contains?.(primaryContainer);
+  if (!rowIsRelatedToPrimary) return { inOfferRow: true, condition: "unknown" };
   const headings = [...row.querySelectorAll("h5")];
   if (headings.length !== 1) return { inOfferRow: true, condition: "unknown" };
   const label = leadingHeadingText(headings[0]);

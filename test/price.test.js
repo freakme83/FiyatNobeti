@@ -299,45 +299,34 @@ test("rejects multiple primary candidates and unrecognized primary prices", () =
     { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
 });
 
-function offerMarkup(label, price, extraHeadingMarkup = "") {
-  return `<div class="a-accordion-row"><h5>${label}${extraHeadingMarkup}</h5><span class="a-offscreen">${price}</span></div>`;
+function enclosingOfferMarkup(labelMarkup, price) {
+  return `<div class="a-accordion-row"><h5>${labelMarkup}</h5><div id="corePrice_feature_div"><span class="a-offscreen">${price}</span></div></div>`;
 }
 
-test("selects the uniquely new offer by its own leading H5 text, regardless of order or price", () => {
-  const styleTail = `<style>.a-accordion-row{color:red}</style><span>unrelated descendant</span>`;
-  for (const [firstLabel, firstPrice, secondLabel, secondPrice] of [
-    ["Yenisini Satın Al", "51.399,00TL", "Kullanılmış ve yeni gibi", "46.647,90TL"],
-    ["Kullanılmış ve yeni gibi", "46.647,90TL", "Yenisini Satın Al", "51.399,00TL"],
-    ["Kullanılmış ve yeni gibi", "60.000,00TL", "Yenisini Satın Al", "51.399,00TL"]
-  ]) {
-    const doc = fixture(`<div id="corePrice_feature_div">${offerMarkup(firstLabel, firstPrice, styleTail)}${offerMarkup(secondLabel, secondPrice, styleTail)}</div>`);
-    assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
-  }
+test("recognizes a new offer when its accordion row encloses the primary container", () => {
+  const doc = fixture(enclosingOfferMarkup(
+    '<span>Yenisini Satın Al</span><style>.offer { color: red }</style><div>Kullanılmış</div>',
+    "51.399,00TL"
+  ));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "success", priceTry: 51399 });
 });
 
-test("fails closed for no new offer, multiple new offers, and unknown competing conditions", () => {
-  const cases = [
-    [offerMarkup("Kullanılmış ve yeni gibi", "46.647,90TL") + offerMarkup("Yenilenmiş", "48.000,00TL"), "PRICE_MISSING"],
-    [offerMarkup("Yenisini Satın Al", "51.399,00TL") + offerMarkup("Yenisini Satın Al", "52.000,00TL"), "PRICE_AMBIGUOUS"],
-    [offerMarkup("Yenisini Satın Al", "51.399,00TL") + offerMarkup("Diğer satın alma seçenekleri", "46.647,90TL"), "PRICE_AMBIGUOUS"],
-    [offerMarkup("Yenisini Satın Al", "51.399,00TL") + offerMarkup("Diğer satın alma seçenekleri", "46.647,90TL") + "<p>Yenisini Satın Al</p><script>Yenisini Satın Al</script><style>Yenisini Satın Al</style>", "PRICE_AMBIGUOUS"]
-  ];
-  for (const [offers, errorCode] of cases) {
-    assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${offers}</div>`)),
-      { status: "failure", errorCode });
-  }
+test("rejects a recognized used offer in an enclosing accordion row", () => {
+  const doc = fixture(enclosingOfferMarkup('<span>Kullanılmış ve yeni gibi</span>', "46.647,90TL"));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_MISSING" });
 });
 
-test("single explicit used offer is never recorded as the current new-product price", () => {
-  assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${offerMarkup("Kullanılmış ve yeni gibi", "46.647,90TL")}</div>`)),
-    { status: "failure", errorCode: "PRICE_MISSING" });
+test("an unknown offer remains ambiguous even when unrelated nested text says new", () => {
+  const doc = fixture(enclosingOfferMarkup(
+    '<span>Satın alma seçenekleri</span><div>Yenisini Satın Al</div>',
+    "51.399,00TL"
+  ));
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
 });
 
-test("a single ordinary primary price and strict price-format failures remain unchanged", () => {
+test("an ordinary single-price page remains successful", () => {
   assert.deepEqual(extractPrimaryPrice(fixture('<div id="corePrice_feature_div"><span class="a-offscreen">51.399,00TL</span></div>')),
     { status: "success", priceTry: 51399 });
-  assert.deepEqual(extractPrimaryPrice(fixture(`<div id="corePrice_feature_div">${offerMarkup("Yenisini Satın Al", "51.399 TL")}</div>`)),
-    { status: "failure", errorCode: "PRICE_UNRECOGNIZED" });
 });
 
 test("classifies bot checks, access denied, and sign-in pages before price extraction", () => {

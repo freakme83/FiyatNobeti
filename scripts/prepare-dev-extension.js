@@ -20,8 +20,7 @@ const DEV_BACKGROUND_SOURCE = `import {
   runAutomaticAlarmTestForDev,
   runOneAutomaticCheckForDev,
   diagnoseProductForDev,
-  setDeveloperEventRecorderForDev,
-  setDeveloperPriceStructureObserverForDev
+  setDeveloperEventRecorderForDev
 } from "./background.js";
 import { installDeveloperAutomaticAlarmTest } from "./dev-automatic-alarm.js";
 import { installDeveloperObservability } from "./dev-observability.js";
@@ -30,14 +29,6 @@ import { installDeveloperPriceDropNotificationTest } from "./scripts/dev-price-d
 const observability = installDeveloperObservability({ chromeApi: chrome });
 setDeveloperEventRecorderForDev(observability.record);
 observability.record({ type: "service_worker_started" });
-
-let lastPriceStructureDiagnostic = null;
-function capturePriceStructureDiagnostic(diagnostic) {
-  if (!diagnostic || diagnostic.parserOutcome?.status !== "failure") return;
-  lastPriceStructureDiagnostic = JSON.parse(JSON.stringify(diagnostic));
-  console.info("[FiyatNöbeti Dev] sanitized primary-price structure", lastPriceStructureDiagnostic);
-}
-setDeveloperPriceStructureObserverForDev(capturePriceStructureDiagnostic);
 
 const alarmTest = installDeveloperAutomaticAlarmTest({
   chromeApi: chrome,
@@ -53,8 +44,7 @@ Object.defineProperty(globalThis, "fiyatNobetiDev", {
     getLastAutomaticAlarmTest: alarmTest.getLastAutomaticAlarmTest,
     getAutomaticCheckDiagnostics: observability.getAutomaticCheckDiagnostics,
     diagnoseProduct: diagnoseProductForDev,
-    testPriceDropNotification: notificationTest.testPriceDropNotification,
-    getLastPriceStructureDiagnostic: () => lastPriceStructureDiagnostic
+    testPriceDropNotification: notificationTest.testPriceDropNotification
   }),
   enumerable: true,
   configurable: false,

@@ -40,7 +40,7 @@ globalThis.chrome = {
     onInstalled: { addListener(fn) { installedListener = fn; } },
     onStartup: { addListener(fn) { startupListener = fn; } },
     async sendMessage(message) {
-      assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG", "PARSE_HTML_STRUCTURE_DIAG"].includes(message.type));
+      assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG"].includes(message.type));
       assert.match(message.html, /corePrice_feature_div/);
       if (parseHandler) return parseHandler(message.html, message.type);
       return { status: "success", priceTry: 36000 };
@@ -97,8 +97,7 @@ const {
   prepareAutomaticAlarmTestForDev,
   runAutomaticAlarmTestForDev,
   runOneAutomaticCheckForDev,
-  setDeveloperEventRecorderForDev,
-  setDeveloperPriceStructureObserverForDev
+  setDeveloperEventRecorderForDev
 } = await import("../background.js");
 assert.equal(globalThis.fiyatNobetiDev, undefined);
 const productionListeners = { listener, alarmListener, installedListener, startupListener };
@@ -140,7 +139,6 @@ const htmlResponse = (asin = "B0FZ9Y4GPF") => new Response(`<div id="corePrice_f
   headers: { "content-type": "text/html; charset=UTF-8" }
 });
 const resetWatchlist = async () => {
-  setDeveloperPriceStructureObserverForDev(undefined);
   stored.watchlist = { version: 1, products: {} };
   stored.automaticChecks = { version: 1, enabled: true, intervalMinutes: 180 };
   stored.automaticCheckState = { version: 1, nextRunAt: null, notBefore: null, unknownSince: {}, lastErrorCode: null };
@@ -1693,53 +1691,6 @@ test("developer diagnosis uses one safe fetch and does not mutate product check 
     assert.deepEqual(stored.watchlist, before);
     assert.doesNotMatch(JSON.stringify(result), /corePrice_feature_div|cookie|<div|ref_=private/);
   } finally { setDeveloperEventRecorderForDev(undefined); }
-});
-
-test("developer-only structural observation uses the same manual response once and is not persisted", async () => {
-  await resetWatchlist();
-  const product = seedSuccessfulProduct("B0GR6FKF1S");
-  const previousSuccessfulPrice = product.lastSuccessfulPriceTry;
-  const safeDiagnostic = {
-    primaryCandidateCount: 2,
-    candidates: [
-      { hasAccordionRow: true, rowInsidePrimaryContainer: true, headingCount: 1, classification: "unknown", leadingDirectTextPresent: true, priceFormatValid: true },
-      { hasAccordionRow: true, rowInsidePrimaryContainer: true, headingCount: 1, classification: "non-new", leadingDirectTextPresent: true, priceFormatValid: true }
-    ],
-    parserOutcome: { status: "failure", errorCode: "PRICE_AMBIGUOUS", rejectionReason: "OFFER_CONDITION_UNKNOWN" }
-  };
-  let observed;
-  setDeveloperPriceStructureObserverForDev(value => { observed = value; });
-  fetchHandler = async () => htmlResponse("B0GR6FKF1S");
-  parseHandler = (_, type) => {
-    assert.equal(type, "PARSE_HTML_STRUCTURE_DIAG");
-    return { status: "failure", errorCode: "PRICE_AMBIGUOUS", priceStructureDiagnostic: safeDiagnostic };
-  };
-
-  try {
-    const result = await message("CHECK_PRODUCT", { asin: "B0GR6FKF1S" });
-    assert.equal(result.errorCode, "PRICE_AMBIGUOUS");
-    assert.deepEqual(observed, safeDiagnostic);
-    assert.equal(fetchCount, 1);
-    assert.equal(stored.watchlist.products.B0GR6FKF1S.lastSuccessfulPriceTry, previousSuccessfulPrice);
-    assert.equal(JSON.stringify(stored).includes("primaryCandidateCount"), false);
-    assert.equal(JSON.stringify(stored).includes("priceStructureDiagnostic"), false);
-  } finally {
-    setDeveloperPriceStructureObserverForDev(undefined);
-  }
-});
-
-test("manual checks do not emit a structural diagnostic without the developer observer", async () => {
-  await resetWatchlist();
-  seedSuccessfulProduct("B0GR6FKF1S");
-  fetchHandler = async () => htmlResponse("B0GR6FKF1S");
-  parseHandler = (_, type) => {
-    assert.equal(type, "PARSE_HTML");
-    return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
-  };
-  const result = await message("CHECK_PRODUCT", { asin: "B0GR6FKF1S" });
-  assert.equal(result.errorCode, "PRICE_AMBIGUOUS");
-  assert.equal(fetchCount, 1);
-  assert.equal(JSON.stringify(stored).includes("priceStructureDiagnostic"), false);
 });
 
 test("developer diagnosis respects permission and does not fetch", async () => {
