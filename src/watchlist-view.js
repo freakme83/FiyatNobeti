@@ -105,6 +105,11 @@ export function createProductRow(doc, product, { customOrder = false, index = 0,
       textElement(doc, "p", "product-meta", "Birden fazla fiyat bulundu. Yüksek tutar varsayılan gösteriliyor; teklif türleri doğrulanamadı."),
       textElement(doc, "p", "product-meta", "Bu fiyatlar doğrulanmış fiyat geçmişine ve fiyat değişim bildirimlerine dahil değildir.")
     );
+    if (priceCents(product.baselinePriceTry) !== null) {
+      detailContent.append(textElement(doc, "p", "product-meta", `Başlangıç fiyatı: ${priceFormatter.format(product.baselinePriceTry)}${product.baselineCheckedAt ? ` · ${timeLabel(product.baselineCheckedAt)}` : ""}`));
+    } else {
+      detailContent.append(textElement(doc, "p", "product-meta", "Başlangıç fiyatı: Henüz doğrulanmadı."));
+    }
     if (priceCents(product.lastSuccessfulPriceTry) !== null) {
       detailContent.append(textElement(doc, "p", "product-meta", `Son başarılı fiyat: ${priceFormatter.format(product.lastSuccessfulPriceTry)}${product.lastSuccessfulCheckAt ? ` · ${timeLabel(product.lastSuccessfulCheckAt)}` : ""}`));
     }
