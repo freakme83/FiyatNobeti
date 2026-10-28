@@ -1,3 +1,5 @@
+import { normalizeCandidatePrices } from "./watchlist.js";
+
 const PRIMARY_SELECTOR = "#corePrice_feature_div .a-offscreen";
 const PAYABLE_PRICE_SELECTOR = "#apex-pricetopay-accessibility-label";
 const UNIT_PRICE_CLASS_PREFIX = "apex-priceperuni";
@@ -161,6 +163,40 @@ function primaryOfferCondition(candidate, primaryContainer) {
   return { inOfferRow: true, condition: "unknown" };
 }
 
+// Informational only: a pair is never a trusted new-product price.
+// Require two distinct price regions and offer rows, but do not require Amazon's
+// optional ASIN/payable classes for an explicitly unverified presentation.
+function unverifiedCandidates(doc, expectedAsin, candidates, containers) {
+  if (!/^[A-Z0-9]{10}$/.test(expectedAsin || "") || candidates.length !== 2) return null;
+  const identities = [...doc.querySelectorAll("#ASIN")];
+  if (identities.some(node => node.getAttribute("value") && node.getAttribute("value") !== expectedAsin)) return null;
+  const rows = candidates.map(candidate => candidate.closest?.(".a-accordion-row"));
+  if (!rows[0] || !rows[1] || rows[0] === rows[1] ||
+      rows[0].contains(rows[1]) || rows[1].contains(rows[0]) ||
+      !containers[0] || !containers[1] || containers[0] === containers[1] ||
+      containers[0].contains(containers[1]) || containers[1].contains(containers[0])) return null;
+  for (let index = 0; index <2; index++) {
+    const candidate = candidates[index];
+    const container = containers[index];
+    const row = rows[index];
+    if (!row.contains(container) || !container.contains(candidate) || candidate.tagName !== "SPAN") return null;
+    // A row's explicitly declared identity must agree, if Amazon provides one.
+    for (const node of [row, ...row.querySelectorAll("[data-asin]")]) {
+      const asin = node.getAttribute?.("data-asin");
+      if (asin && asin !== expectedAsin) return null;
+    }
+    // Reject reference/strike/variant contexts, including ancestors of the
+    // price and the region itself. Used offers remain displayable, never trusted.
+    for (let node = candidate; node; node = node.parentElement) {
+      if (["S", "DEL", "STRIKE"].includes(node.tagName) ||
+          node.getAttribute?.("data-a-strike")?.toLowerCase() === "true" ||
+          /(?:reference|strike|was.?price|a-text-price|variant|twister|swatch|list.?price)/i.test(`${node.id || ""} ${classNames(node)}`)) return null;
+      if (node === row) break;
+    }
+  }
+  return normalizeCandidatePrices(candidates.map(candidate => parseTurkishPrice(candidate.textContent)));
+}
+
 function extractPayablePriceFallback(doc) {
   const candidates = [...doc.querySelectorAll(PAYABLE_PRICE_SELECTOR)];
   if (candidates.length > 1) {
@@ -189,7 +225,7 @@ export function parseTurkishPrice(value) {
   return Number.isSafeInteger(Math.round(price * 100)) && price > 0 ? price : null;
 }
 
-export function extractPrimaryPrice(doc) {
+export function extractPrimaryPrice(doc, expectedAsin = null) {
   const title = doc.title || "";
   const bodyText = doc.body?.textContent || "";
   // A verification form is structural evidence; incidental scripts and product text are not.
@@ -233,11 +269,13 @@ export function extractPrimaryPrice(doc) {
     const nonNewOfferCount = conditions.filter(({ condition }) => condition === "non-new").length;
     const unknownOfferCount = conditions.filter(({ condition }) => condition === "unknown").length;
     if (unknownOfferCount > 0) {
-      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers);
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS", ...(candidatePricesTry ? { candidatePricesTry } : {}) };
     }
     const newIndexes = conditions.flatMap(({ condition }, index) => condition === "new" ? [index] : []);
     if (newIndexes.length > 1) {
-      return { status: "failure", errorCode: "PRICE_AMBIGUOUS" };
+      const candidatePricesTry = unverifiedCandidates(doc, expectedAsin, candidates, candidateContainers);
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS", ...(candidatePricesTry ? { candidatePricesTry } : {}) };
     }
     if (newIndexes.length === 0) return { status: "failure", errorCode: "PRICE_MISSING" };
     selectedCandidate = candidates[newIndexes[0]];

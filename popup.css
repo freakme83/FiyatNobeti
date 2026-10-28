@@ -22,7 +22,7 @@ input[type="checkbox"]:disabled { cursor: default; }
 label { display: block; font-weight: 650; margin-bottom: 5px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #a5b1bb; border-radius: 6px; font: inherit; }
-input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible, .product-title a:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
+input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible, .product-title a:focus-visible, .product-detail-content a:focus-visible { outline: 2px solid #1866a5; outline-offset: 2px; }
 .notice { margin: 7px 0 0; color: #53606c; font-size: 11px; line-height: 1.4; }
 button { font: inherit; cursor: pointer; }
 #add-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
@@ -58,6 +58,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .product-comparison.decrease { color: #146b3a; }
 .product-comparison.increase { color: #a12626; }
 .product-comparison.unchanged { color: #40505c; }
+.product-candidate-other { color: #607482; font-weight: 400; }
 .product-comparison-detail { margin: 1px 0; font-size: 11px; color: #40505c; }
 .product-status { grid-column: 1; grid-row: 3; margin: 3px 0 0; font-size: 11px; }
 .product-status.error { color: #9f2927; }

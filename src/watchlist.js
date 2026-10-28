@@ -11,6 +11,20 @@ export function priceCents(value) {
   return Number.isSafeInteger(cents) && cents > 0 && cents <= MAX_PRICE_CENTS ? cents : null;
 }
 
+// Candidate prices are informational and never become successful observations.
+export function normalizeCandidatePrices(value) {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const cents = value.map(priceCents);
+  if (cents.some(price => price === null) || cents[0] === cents[1]) return null;
+  return [Math.max(...cents) / 100, Math.min(...cents) / 100];
+}
+
+export function normalizeUnverifiedCandidates(value) {
+  if (!value || value.status !== "unverified" || !validTimestamp(value.checkedAt)) return null;
+  const pricesTry = normalizeCandidatePrices(value.pricesTry);
+  return pricesTry ? { status: "unverified", checkedAt: value.checkedAt, pricesTry } : null;
+}
+
 function validTimestamp(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
@@ -100,6 +114,11 @@ export function normalizeWatchlist(value) {
       ? candidate.lastCheckStatus : "never";
     record.lastErrorCode = typeof candidate.lastErrorCode === "string" && /^[A-Z0-9_]{1,64}$/.test(candidate.lastErrorCode)
       ? candidate.lastErrorCode : null;
+    const unverified = normalizeUnverifiedCandidates(candidate.unverifiedPriceCandidates);
+    if (record.lastCheckStatus === "failure" && record.lastErrorCode === "PRICE_AMBIGUOUS" &&
+        unverified?.checkedAt === record.lastAttemptedCheckAt) {
+      record.unverifiedPriceCandidates = unverified;
+    }
     products[asin] = record;
   }
   return { version: WATCHLIST_VERSION, products };

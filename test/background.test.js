@@ -42,7 +42,7 @@ globalThis.chrome = {
     async sendMessage(message) {
       assert.ok(["PARSE_HTML", "PARSE_HTML_DIAG"].includes(message.type));
       assert.match(message.html, /corePrice_feature_div/);
-      if (parseHandler) return parseHandler(message.html, message.type);
+      if (parseHandler) return parseHandler(message.html, message.type, message.expectedAsin);
       return { status: "success", priceTry: 36000 };
     }
   },
@@ -1114,6 +1114,70 @@ test("failure, unchanged recovery, manual refresh, addition and diagnostics do n
       await runOneAutomaticCheckForDev();
       assert.equal(notificationCreations, 1);
     } finally { setDeveloperEventRecorderForDev(); }
+  });
+});
+
+test("automatic ambiguous candidates preserve verified data and cannot notify; a manual success clears them", async () => {
+  useProductionBackground();
+  await withClock("2026-10-22T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    const original = seedSuccessfulProduct();
+    const priorTime = original.lastSuccessfulCheckAt;
+    parseHandler = async (_html, _type, expectedAsin) => {
+      assert.equal(expectedAsin, original.asin);
+      return { status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [800, 900] };
+    };
+    await installedListener();
+    advanceToAlarm(clock);
+    await fireAutomaticAlarm();
+    let product = stored.watchlist.products[original.asin];
+    assert.equal(product.lastSuccessfulPriceTry, 1000);
+    assert.equal(product.lastSuccessfulCheckAt, priorTime);
+    assert.equal(product.baselinePriceTry, 1000);
+    assert.equal(product.lastCheckStatus, "failure");
+    assert.deepEqual(product.unverifiedPriceCandidates, {
+      status: "unverified", checkedAt: product.lastAttemptedCheckAt, pricesTry: [900, 800]
+    });
+    assert.equal(notificationCreations, 0);
+    assert.equal(fetchCount, 1);
+    assert.equal(alarms.get(AUTO_ALARM_NAME).scheduledTime, clock.now + AUTO_INTERVAL_MS);
+    assert.deepEqual((await message("GET_WATCHLIST")).watchlist.products[original.asin].unverifiedPriceCandidates, product.unverifiedPriceCandidates);
+    assert.equal(stored.priceCheckDiagnostics.entries.at(-1).result, "failure");
+
+    parseHandler = async () => ({ status: "success", priceTry: 850, title: "Test product" });
+    assert.equal((await message("CHECK_PRODUCT", { asin: original.asin })).status, "success");
+    product = stored.watchlist.products[original.asin];
+    assert.equal(product.lastSuccessfulPriceTry, 850);
+    assert.equal(product.baselinePriceTry, 1000);
+    assert.equal(product.unverifiedPriceCandidates, undefined);
+    assert.equal(notificationCreations, 0);
+  });
+});
+
+test("a new product with candidates remains addable and a later unqualified failure clears them", async () => {
+  useProductionBackground();
+  await withClock("2026-10-22T12:00:00.000Z", async clock => {
+    await resetWatchlist();
+    parseHandler = async () => ({ status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, 3739.41], title: "Apple Magic Mouse" });
+    const added = await message("ADD_PRODUCT", { url: productUrl("B0D47HCRZ6") });
+    assert.equal(added.status, "added");
+    assert.equal(added.check.errorCode, "PRICE_AMBIGUOUS");
+    let product = added.watchlist.products.B0D47HCRZ6;
+    assert.deepEqual(product.unverifiedPriceCandidates.pricesTry, [4192.49, 3739.41]);
+    assert.equal(product.title, "Apple Magic Mouse");
+    assert.equal(product.lastSuccessfulPriceTry, null);
+    assert.equal(product.baselinePriceTry, null);
+    clock.advance(180_000);
+    parseHandler = async () => ({ status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, -1] });
+    await message("CHECK_PRODUCT", { asin: product.asin });
+    product = stored.watchlist.products[product.asin];
+    assert.equal(product.unverifiedPriceCandidates, undefined);
+    clock.advance(180_000);
+    parseHandler = async () => ({ status: "success", priceTry: 4200, title: "Product" });
+    assert.equal((await message("CHECK_PRODUCT", { asin: product.asin })).status, "success");
+    assert.equal(stored.watchlist.products[product.asin].lastSuccessfulPriceTry, 4200);
+    assert.equal(stored.watchlist.products[product.asin].baselinePriceTry, 4200);
+    assert.equal(notificationCreations, 0);
   });
 });
 

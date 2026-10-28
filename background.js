@@ -4,6 +4,7 @@ import {
   createProductRecord,
   createWatchlist,
   establishFirstBaseline,
+  normalizeCandidatePrices,
   normalizeProductTitle,
   normalizeWatchlist,
   WATCHLIST_KEY
@@ -137,12 +138,17 @@ async function fetchProduct(canonicalUrl, { onRequestStart, diagnostic, develope
     const html = await readLimitedHtml(response, diagnostic);
     await ensureOffscreen();
     const parseType = developerParse ? "PARSE_HTML_DIAG" : "PARSE_HTML";
-    const parsed = await chrome.runtime.sendMessage({ type: parseType, html });
+    const expectedAsin = parseAmazonInput(canonicalUrl).asin;
+    const parsed = await chrome.runtime.sendMessage({ type: parseType, html, expectedAsin });
     if (diagnostic && parsed?.diagnostics) diagnostic.structure = parsed.diagnostics;
     if (parsed?.status === "success" && Number.isFinite(parsed.priceTry)) {
       return { status: "success", priceTry: parsed.priceTry, title: normalizeProductTitle(parsed.title) };
     }
-    return { status: "failure", errorCode: parsed?.errorCode || "PARSE_ERROR" };
+    const candidatePricesTry = parsed?.errorCode === "PRICE_AMBIGUOUS"
+      ? normalizeCandidatePrices(parsed.candidatePricesTry) : null;
+    return { status: "failure", errorCode: parsed?.errorCode || "PARSE_ERROR",
+      ...(candidatePricesTry ? { candidatePricesTry } : {}),
+      ...(candidatePricesTry && normalizeProductTitle(parsed?.title) ? { title: normalizeProductTitle(parsed.title) } : {}) };
   } catch (error) {
     return {
       status: "failure",
@@ -338,6 +344,7 @@ async function checkWatchlistProduct(asin, {
       product.lastAttemptedCheckAt = new Date().toISOString();
       product.lastCheckStatus = "checking";
       product.lastErrorCode = null;
+      delete product.unverifiedPriceCandidates;
       inFlightChecks.set(flightKey, true);
       ownsFlight = true;
       try {
@@ -397,6 +404,12 @@ async function checkWatchlistProduct(asin, {
       } else {
         product.lastCheckStatus = "failure";
         product.lastErrorCode = fetched.errorCode || "PARSE_ERROR";
+        const pricesTry = fetched.errorCode === "PRICE_AMBIGUOUS" ? normalizeCandidatePrices(fetched.candidatePricesTry) : null;
+        if (pricesTry) {
+          product.unverifiedPriceCandidates = { status: "unverified", checkedAt, pricesTry };
+          if (fetched.title) product.title = fetched.title;
+        }
+        else delete product.unverifiedPriceCandidates;
       }
       await chrome.storage.local.set({ [WATCHLIST_KEY]: watchlist });
       if (requestStarted) {

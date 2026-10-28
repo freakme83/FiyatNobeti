@@ -40,8 +40,9 @@ function fixture(html) {
         return false;
       },
       querySelectorAll(selector) {
-        if (selector !== "h5") throw new Error("Unexpected element selector: " + selector);
-        return findAll(this, node => node.tagName === "H5");
+        if (selector === "h5") return findAll(this, node => node.tagName === "H5");
+        if (selector === "[data-asin]") return findAll(this, node => node.getAttribute("data-asin") !== null);
+        throw new Error("Unexpected element selector: " + selector);
       },
       get textContent() { return ownText + children.map(child => child.textContent).join(""); }
     };
@@ -357,6 +358,44 @@ test("unknown or nested conflicting offer labels across primary containers remai
     <div class="a-accordion-row"><h5><div>Diğer seçenek</div></h5>
       <div id="corePrice_feature_div"><span class="a-offscreen">46.647,90TL</span></div></div>`);
   assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+});
+
+const syntheticAsin = "B0GR6FKF1S";
+const candidateRow = (label, price, options = {}) => `<div class="a-accordion-row" data-asin="${options.asin || syntheticAsin}">
+  <h5>${label}</h5><div id="corePrice_feature_div"><span class="a-price apex-pricetopay-value ${options.extraClass || ""}"><span class="a-offscreen">${price}</span></span></div></div>`;
+const candidatePage = (first, second, pageAsin = syntheticAsin) => fixture(`<input type="hidden" id="ASIN" value="${pageAsin}">${first}${second}`);
+
+test("two distinct identity-bound payable candidates are returned only as unverified ambiguity", () => {
+  const doc = candidatePage(candidateRow("Seçenek A", "4.192,49TL"), candidateRow("Seçenek B", "3.739,41TL"));
+  assert.deepEqual(extractPrimaryPrice(doc, syntheticAsin), {
+    status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, 3739.41]
+  });
+  assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+});
+
+test("reference, malformed, duplicate and mismatched candidates remain ordinary ambiguous failures", () => {
+  const first = candidateRow("Seçenek A", "4.192,49TL");
+  const rejected = [
+    candidatePage(first, candidateRow("Seçenek B", "3.739,41TL", { extraClass: "a-text-price" })),
+    candidatePage(first, candidateRow("Seçenek B", "3.739,41TL").replace('class="a-price apex-pricetopay-value ', 'data-a-strike="true" class="a-price apex-pricetopay-value ')),
+    candidatePage(first, candidateRow("Seçenek B", "3.739 TL")),
+    candidatePage(first, candidateRow("Seçenek B", "4.192,49TL")),
+    candidatePage(first, candidateRow("Seçenek B", "3.739,41TL", { asin: "B0D47HCRZ6" })),
+    candidatePage(first, candidateRow("Seçenek B", "3.739,41TL"), "B0D47HCRZ6"),
+    fixture(`<input type="hidden" id="ASIN" value="${syntheticAsin}">${first}${candidateRow("Seçenek B", "3.739,41TL")}${candidateRow("Seçenek C", "3.200,00TL")}`)
+  ];
+  for (const doc of rejected) assert.deepEqual(extractPrimaryPrice(doc, syntheticAsin),
+    { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+});
+
+test("two unverified prices remain visible without optional payable or ASIN markers, including known used offers", () => {
+  const first = candidateRow("Seçenek A", "4.192,49TL").replace("apex-pricetopay-value", "");
+  const second = candidateRow("<div><span>KULLANILMIŞ VE YENİ GİBİ</span></div>", "3.739,41TL")
+    .replace("apex-pricetopay-value", "");
+  const doc = fixture(first + second);
+  assert.deepEqual(extractPrimaryPrice(doc, syntheticAsin), {
+    status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, 3739.41]
+  });
 });
 
 test("classifies bot checks, access denied, and sign-in pages before price extraction", () => {

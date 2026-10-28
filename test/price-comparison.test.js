@@ -32,6 +32,22 @@ test("first valid success fixes a baseline and later observations cannot replace
   assert.equal(priceCents(1000.01), 100001);
 });
 
+test("unverified candidates survive normalization only for the matching ambiguous attempt", () => {
+  const record = product();
+  record.lastAttemptedCheckAt = stamp;
+  record.lastCheckStatus = "failure";
+  record.lastErrorCode = "PRICE_AMBIGUOUS";
+  record.unverifiedPriceCandidates = { status: "unverified", checkedAt: stamp, pricesTry: [80, 100] };
+  const stored = { version: 2, products: { [asin]: record } };
+  assert.deepEqual(normalizeWatchlist(stored).products[asin].unverifiedPriceCandidates,
+    { status: "unverified", checkedAt: stamp, pricesTry: [100, 80] });
+  record.unverifiedPriceCandidates.pricesTry = [80, 80];
+  assert.equal(normalizeWatchlist(stored).products[asin].unverifiedPriceCandidates, undefined);
+  record.unverifiedPriceCandidates.pricesTry = [80, 100];
+  record.lastAttemptedCheckAt = "2026-10-24T10:00:00.000Z";
+  assert.equal(normalizeWatchlist(stored).products[asin].unverifiedPriceCandidates, undefined);
+});
+
 test("lower, higher, unchanged and tiny cent-exact prices render visible Turkish comparisons", () => {
   const record = product();
   establishFirstBaseline(record, 1000, stamp);
