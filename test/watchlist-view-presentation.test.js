@@ -69,6 +69,7 @@ test("unverified candidates use the compact price area and explain their limits 
   const detailText = text(details);
   assert.match(detailText, /teklif türleri doğrulanamadı/);
   assert.match(detailText, /fiyat değişim bildirimlerine dahil değildir/);
+  assert.match(detailText, /Başlangıç fiyatı: ₺1\\.000,00/);
   assert.match(detailText, /Son başarılı fiyat: ₺1\.000,00/);
   const link = details.children[0].children.find(child => child.tagName === "a");
   assert.equal(link.href, `https://www.amazon.com.tr/dp/${asin}`);
