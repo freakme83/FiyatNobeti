@@ -1701,12 +1701,18 @@ test("manual developer check exposes only the latest bounded parser ambiguity re
   product.lastSuccessfulPriceTry = 599.99;
   const previousPrice = product.lastSuccessfulPriceTry;
   let requests = 0;
-  fetchHandler = async () => { requests++; return htmlResponse("B0D47HCRZ6"); };
-  parseHandler = (_, type) => {
+  const otherAsin = "B0D47HCRZ7";
+  fetchHandler = async url => { requests++; return htmlResponse(url.split("/").at(-1)); };
+  parseHandler = (html, type) => {
     assert.equal(type, "PARSE_HTML_BRANCH_DIAG");
+    if (html.includes(otherAsin)) return { status: "success", priceTry: 12 };
     return { status: "failure", errorCode: "PRICE_AMBIGUOUS", branchDiagnostic: {
-      errorCode: "PRICE_AMBIGUOUS", source: "FALLBACK_MULTIPLE", primaryCandidateCount: 0,
-      fallbackCandidateCount: 2, newOfferCount: 0, nonNewOfferCount: 0, unknownOfferCount: 0
+      errorCode: "PRICE_AMBIGUOUS", source: "PRIMARY_MULTIPLE_UNKNOWN", primaryCandidateCount: 2,
+      fallbackCandidateCount: null, newOfferCount: 0, nonNewOfferCount: 0, unknownOfferCount: 2,
+      primaryContainerCount: 1,
+      candidates: [{ priceFormatValid: true, sameParsedAmount: true, isStrikePrice: false, isPriceToPay: true,
+        hasAccordionRow: true, sameAccordionRow: true, headingCount: 1, unknownReason: "HEADING_LABEL_UNRECOGNIZED",
+        headingStopTag: null, candidateInsideSelectedPrimaryContainer: true, rawHeading: "must be stripped", price: 51399 }]
     } };
   };
   try {
@@ -1714,11 +1720,20 @@ test("manual developer check exposes only the latest bounded parser ambiguity re
     assert.equal(result.errorCode, "PRICE_AMBIGUOUS");
     assert.equal(requests, 1);
     assert.deepEqual(getLastPriceParserAmbiguityForDev(), {
-      errorCode: "PRICE_AMBIGUOUS", source: "FALLBACK_MULTIPLE", primaryCandidateCount: 0,
-      fallbackCandidateCount: 2, newOfferCount: 0, nonNewOfferCount: 0, unknownOfferCount: 0
+      errorCode: "PRICE_AMBIGUOUS", source: "PRIMARY_MULTIPLE_UNKNOWN", primaryCandidateCount: 2,
+      fallbackCandidateCount: null, newOfferCount: 0, nonNewOfferCount: 0, unknownOfferCount: 2,
+      primaryContainerCount: 1,
+      candidates: [{ priceFormatValid: true, sameParsedAmount: true, isStrikePrice: false, isPriceToPay: true,
+        hasAccordionRow: true, sameAccordionRow: true, headingCount: 1, unknownReason: "HEADING_LABEL_UNRECOGNIZED",
+        headingStopTag: null, candidateInsideSelectedPrimaryContainer: true }]
     });
+    assert.doesNotMatch(JSON.stringify(getLastPriceParserAmbiguityForDev()), /must be stripped|51399/);
     assert.equal(stored.watchlist.products.B0D47HCRZ6.lastSuccessfulPriceTry, previousPrice);
     assert.equal(Object.hasOwn(stored, "lastDeveloperPriceParserAmbiguity"), false);
+    seedProduct(otherAsin);
+    assert.equal((await message("CHECK_PRODUCT", { asin: otherAsin })).status, "success");
+    assert.equal(requests, 2);
+    assert.equal(getLastPriceParserAmbiguityForDev().source, "PRIMARY_MULTIPLE_UNKNOWN");
   } finally { setDeveloperEventRecorderForDev(undefined); }
 });
 
