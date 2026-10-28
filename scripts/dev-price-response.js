@@ -230,7 +230,7 @@ export function installDeveloperPriceParser(chromeApi = chrome) {
       const doc = new DOMParser().parseFromString(message.html, "text/html");
       const result = extractPrimaryPrice(doc, message.expectedAsin);
       sendResponse({ ...result,
-        ...(result.status === "success" ? { title: extractProductTitle(doc) } : {}),
+        title: extractProductTitle(doc),
         ...(message.type === "PARSE_HTML_DIAG" ? { diagnostics: inspectPriceDocument(doc) } : {}) });
     } catch {
       sendResponse({ status: "failure", errorCode: "PARSE_ERROR" });
