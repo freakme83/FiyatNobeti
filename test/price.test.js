@@ -373,21 +373,29 @@ test("two distinct identity-bound payable candidates are returned only as unveri
   assert.deepEqual(extractPrimaryPrice(doc), { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
 });
 
-test("used, reference, malformed, duplicate and mismatched candidates remain ordinary ambiguous failures", () => {
+test("reference, malformed, duplicate and mismatched candidates remain ordinary ambiguous failures", () => {
   const first = candidateRow("Seçenek A", "4.192,49TL");
   const rejected = [
-    candidatePage(first, candidateRow("<div><span>KULLANILMIŞ VE YENİ GİBİ</span></div>", "3.739,41TL")),
     candidatePage(first, candidateRow("Seçenek B", "3.739,41TL", { extraClass: "a-text-price" })),
     candidatePage(first, candidateRow("Seçenek B", "3.739,41TL").replace('class="a-price apex-pricetopay-value ', 'data-a-strike="true" class="a-price apex-pricetopay-value ')),
     candidatePage(first, candidateRow("Seçenek B", "3.739 TL")),
     candidatePage(first, candidateRow("Seçenek B", "4.192,49TL")),
     candidatePage(first, candidateRow("Seçenek B", "3.739,41TL", { asin: "B0D47HCRZ6" })),
     candidatePage(first, candidateRow("Seçenek B", "3.739,41TL"), "B0D47HCRZ6"),
-    fixture(first + candidateRow("Seçenek B", "3.739,41TL")),
     fixture(`<input type="hidden" id="ASIN" value="${syntheticAsin}">${first}${candidateRow("Seçenek B", "3.739,41TL")}${candidateRow("Seçenek C", "3.200,00TL")}`)
   ];
   for (const doc of rejected) assert.deepEqual(extractPrimaryPrice(doc, syntheticAsin),
     { status: "failure", errorCode: "PRICE_AMBIGUOUS" });
+});
+
+test("two unverified prices remain visible without optional payable or ASIN markers, including known used offers", () => {
+  const first = candidateRow("Seçenek A", "4.192,49TL").replace("apex-pricetopay-value", "");
+  const second = candidateRow("<div><span>KULLANILMIŞ VE YENİ GİBİ</span></div>", "3.739,41TL")
+    .replace("apex-pricetopay-value", "");
+  const doc = fixture(first + second);
+  assert.deepEqual(extractPrimaryPrice(doc, syntheticAsin), {
+    status: "failure", errorCode: "PRICE_AMBIGUOUS", candidatePricesTry: [4192.49, 3739.41]
+  });
 });
 
 test("classifies bot checks, access denied, and sign-in pages before price extraction", () => {
